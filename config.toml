@@ -1,0 +1,7 @@
+[tcp_preprocess]
+fmri_dir = "D:\\master"
+tcp_dir = "D:\\master\\data\\ds005237"
+tcp_annex_remote = "9cee7da3-a848-4b59-b8ff-d7848f2ad864"
+output_dir = "D:\\master\\preprocessing\\tcp"
+filter = ["available_demos_filter", "available_shaps_filter"]
+dry_run = false
