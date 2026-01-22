@@ -1,4 +1,5 @@
 pub mod annex;
+pub mod polars_csv;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
