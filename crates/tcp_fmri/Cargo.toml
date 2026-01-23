@@ -1,0 +1,17 @@
+[package]
+name = "tcp_fmri"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+git2 = "0.18"
+
+anyhow = { workspace = true }
+polars = { workspace = true }
+polars-io = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+config = { path = "../config" }

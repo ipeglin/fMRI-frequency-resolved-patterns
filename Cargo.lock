@@ -404,6 +404,7 @@ dependencies = [
  "anyhow",
  "clap",
  "config",
+ "tcp_fmri",
  "tcp_subject_selection",
  "tracing",
  "tracing-subscriber",
@@ -2912,6 +2913,21 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "tcp_fmri"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "config",
+ "git2",
+ "polars",
+ "polars-io",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tracing",
 ]
 
 [[package]]
