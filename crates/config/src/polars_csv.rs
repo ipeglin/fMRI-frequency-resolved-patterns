@@ -15,3 +15,22 @@ pub fn write_dataframe_with_file(file: &mut fs::File, df: &DataFrame) -> PolarsR
         .with_separator(b',')
         .finish(&mut df.to_owned())
 }
+
+pub fn read_dataframe<P: AsRef<Path>>(file: P) -> PolarsResult<DataFrame> {
+    let path_str = file
+        .as_ref()
+        .to_str()
+        .ok_or_else(|| polars_err!(ComputeError: "Path is not valid UTF-8"))?;
+
+    let pl_path = PlPath::new(path_str);
+
+    let df = LazyCsvReader::new(pl_path)
+        .with_separator(b',')
+        .with_has_header(true)
+        .with_ignore_errors(true)
+        .with_encoding(CsvEncoding::LossyUtf8)
+        .finish()?
+        .collect()?;
+
+    Ok(df)
+}
