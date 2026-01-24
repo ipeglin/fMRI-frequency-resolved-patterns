@@ -1,7 +1,12 @@
-[tcp_preprocess]
-fmri_dir = "D:\\master"
-tcp_dir = "D:\\master\\data\\ds005237"
-tcp_annex_remote = "9cee7da3-a848-4b59-b8ff-d7848f2ad864"
-output_dir = "D:\\master\\preprocessing\\tcp"
+[tcp_subject_selection]
+tcp_dir = "/path/to/tcp"
+tcp_annex_remote = "remote_annex_id"
+output_dir = "/path/to/subject/output"
 filter = ["available_demos_filter", "available_shaps_filter"]
 dry_run = false
+
+[tcp_fmri_preprocess]
+fmri_dir = "/path/to/fmri"
+filter_dir = "/path/to/filter/outputs"
+cortical_atlas = "path/to/cortical/atlas"
+subcortical_atlas = "path/to/subcortical/atlas"

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use config::TCPPreprocessConfig;
+use config::TCPSubjectSelectionConfig;
 use config::annex;
 use config::polars_csv;
 use git2::Repository;
@@ -19,7 +19,7 @@ pub enum TCPPreprocessError {
     RequiredFileMissing(String),
 }
 
-pub fn run(cfg: &TCPPreprocessConfig) -> Result<()> {
+pub fn run(cfg: &TCPSubjectSelectionConfig) -> Result<()> {
     info!("{:?}", cfg);
 
     ////////////////////////
