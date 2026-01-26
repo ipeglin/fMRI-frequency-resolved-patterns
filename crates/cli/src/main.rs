@@ -1,7 +1,9 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use config::{
-    AppConfig, TCPSubjectSelectionConfig, TCPfMRIPreprocessConfig, load_config};
+    AppConfig, TCPSubjectSelectionConfig, TCPfMRIPreprocessConfig, TCPfMRIProcessConfig,
+    load_config,
+};
 use std::path::PathBuf;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
@@ -70,6 +72,16 @@ enum Command {
         #[arg(long)]
         dry_run: Option<bool>,
     },
+    TcpFmriProcess {
+        #[arg(long)]
+        fmri_dir: Option<PathBuf>,
+
+        #[arg(long)]
+        output_dir: Option<PathBuf>,
+
+        #[arg(long, value_delimiter = ',')]
+        subjects: Option<Vec<String>>,
+    },
 }
 
 fn init_logging(level: &str, format: LogFormat) {
@@ -105,6 +117,7 @@ fn main() -> Result<()> {
     let cfg = load_config(&cli.config).unwrap_or_else(|_| AppConfig {
         tcp_subject_selection: TCPSubjectSelectionConfig::default(),
         tcp_fmri_preprocess: TCPfMRIPreprocessConfig::default(),
+        tcp_fmri_process: TCPfMRIProcessConfig::default(),
     });
 
     info!(
@@ -178,6 +191,27 @@ fn main() -> Result<()> {
             };
 
             tcp_fmri_preprocess::run(&p)
+        }
+        Command::TcpFmriProcess {
+            fmri_dir,
+            output_dir,
+            subjects,
+        } => {
+            let mut p = cfg.tcp_fmri_process;
+
+            if let Some(v) = fmri_dir {
+                p.fmri_dir = v
+            };
+            if let Some(v) = output_dir {
+                p.output_dir = v
+            };
+            if let Some(ref v) = subjects
+                && !v.is_empty()
+            {
+                p.subjects = subjects;
+            };
+
+            tcp_fmri_process::run(&p)
         }
     }
 }

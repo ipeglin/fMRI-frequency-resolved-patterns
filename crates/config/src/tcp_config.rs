@@ -75,3 +75,30 @@ impl fmt::Display for TCPfMRIPreprocessConfig {
         write!(f, "  Dry run: {}", self.dry_run)
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TCPfMRIProcessConfig {
+    pub fmri_dir: PathBuf,
+    #[serde(default)]
+    pub subjects: Option<Vec<String>>,
+    pub output_dir: PathBuf,
+}
+
+impl Default for TCPfMRIProcessConfig {
+    fn default() -> Self {
+        Self {
+            fmri_dir: PathBuf::from("/path/to/raw_fmri_data"),
+            subjects: None,
+            output_dir: PathBuf::from("/path/to/output"),
+        }
+    }
+}
+
+impl fmt::Display for TCPfMRIProcessConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "TPC fMRI Preprocessing:")?;
+        writeln!(f, "  fMRI Dir: {}", self.fmri_dir.display())?;
+        writeln!(f, "  Output Dir: {}", self.output_dir.display())?;
+        write!(f, "  Subjects: {:?}", self.subjects)
+    }
+}

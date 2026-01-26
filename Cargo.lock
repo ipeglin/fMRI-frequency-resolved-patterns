@@ -441,6 +441,7 @@ dependencies = [
  "clap",
  "config",
  "tcp_fmri_preprocess",
+ "tcp_fmri_process",
  "tcp_subject_selection",
  "tracing",
  "tracing-subscriber",
@@ -3293,6 +3294,23 @@ dependencies = [
  "ndarray 0.16.1",
  "nifti",
  "nifti_masker",
+ "polars",
+ "polars-io",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "tcp_fmri_process"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "config",
+ "hdf5",
+ "ndarray 0.16.1",
+ "nifti",
  "polars",
  "polars-io",
  "serde",

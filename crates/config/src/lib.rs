@@ -2,7 +2,7 @@ pub mod annex;
 pub mod polars_csv;
 pub mod tcp_config;
 
-pub use tcp_config::{TCPSubjectSelectionConfig, TCPfMRIPreprocessConfig};
+pub use tcp_config::{TCPSubjectSelectionConfig, TCPfMRIPreprocessConfig, TCPfMRIProcessConfig};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -14,6 +14,7 @@ pub struct AppConfig {
     pub tcp_subject_selection: TCPSubjectSelectionConfig,
     #[serde(default)]
     pub tcp_fmri_preprocess: TCPfMRIPreprocessConfig,
+    pub tcp_fmri_process: TCPfMRIProcessConfig,
 }
 
 pub fn load_config(path: &Path) -> Result<AppConfig> {
