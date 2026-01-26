@@ -8,3 +8,4 @@ anyhow = { workspace = true }
 nalgebra = "0.33"
 ndarray = { workspace = true }
 nifti = { workspace = true }
+tracing = { workspace = true }
