@@ -440,7 +440,7 @@ dependencies = [
  "anyhow",
  "clap",
  "config",
- "tcp_fmri",
+ "tcp_fmri_preprocess",
  "tcp_subject_selection",
  "tracing",
  "tracing-subscriber",
@@ -3283,7 +3283,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tcp_fmri"
+name = "tcp_fmri_preprocess"
 version = "0.1.0"
 dependencies = [
  "anyhow",

@@ -4,7 +4,7 @@ members = [
   "crates/cli",
   "crates/config",
   "crates/tcp_subject_selection",
-  "crates/tcp_fmri",
+  "crates/tcp_fmri_preprocess",
   "crates/nifti_masker"
 ]
 

@@ -172,9 +172,10 @@ pub fn run(cfg: &TCPfMRIPreprocessConfig) -> Result<()> {
             );
 
             // Write output
-            let output_path = cfg
-                .output_dir
-                .join(format!("{}_{}.h5", subject_key, task_name));
+            let output_subject_dir = cfg.output_dir.join(subject_key);
+            std::fs::create_dir_all(&output_subject_dir)?;
+
+            let output_path = output_subject_dir.join(format!("{}_{}.h5", subject_key, task_name));
 
             let write_start = Instant::now();
             write_timeseries_h5(&output_path, &combined)?;

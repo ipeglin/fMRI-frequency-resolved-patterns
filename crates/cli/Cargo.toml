@@ -12,4 +12,4 @@ tracing-subscriber = { workspace = true }
 
 config = { path = "../config" }
 tcp_subject_selection = { path = "../tcp_subject_selection" }
-tcp_fmri = { path = "../tcp_fmri" }
+tcp_fmri_preprocess = { path = "../tcp_fmri_preprocess" }

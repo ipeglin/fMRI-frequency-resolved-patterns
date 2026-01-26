@@ -139,7 +139,7 @@ fn main() -> Result<()> {
                 p.filter_dir = v
             };
 
-            tcp_fmri::run(&p)
+            tcp_fmri_preprocess::run(&p)
         }
     }
 }
