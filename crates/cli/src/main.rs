@@ -79,8 +79,18 @@ enum Command {
         #[arg(long)]
         output_dir: Option<PathBuf>,
 
-        #[arg(long, value_delimiter = ',')]
-        subjects: Option<Vec<String>>,
+        #[arg(long)]
+        cortical_lut: Option<PathBuf>,
+
+        #[arg(long)]
+        subcortical_lut: Option<PathBuf>,
+
+        #[arg(long)]
+        subject_file: Option<PathBuf>,
+
+        /// Force reprocessing of subjects that already exist in output files
+        #[arg(long, short = 'f')]
+        force: bool,
     },
 }
 
@@ -114,10 +124,18 @@ fn main() -> Result<()> {
 
     init_logging(&cli.log_level, cli.log_format);
 
-    let cfg = load_config(&cli.config).unwrap_or_else(|_| AppConfig {
-        tcp_subject_selection: TCPSubjectSelectionConfig::default(),
-        tcp_fmri_preprocess: TCPfMRIPreprocessConfig::default(),
-        tcp_fmri_process: TCPfMRIProcessConfig::default(),
+    let cfg = load_config(&cli.config).unwrap_or_else(|e| {
+        eprintln!(
+            "Warning: Failed to load config from {}: {}",
+            cli.config.display(),
+            e
+        );
+        eprintln!("Using default configuration values");
+        AppConfig {
+            tcp_subject_selection: TCPSubjectSelectionConfig::default(),
+            tcp_fmri_preprocess: TCPfMRIPreprocessConfig::default(),
+            tcp_fmri_process: TCPfMRIProcessConfig::default(),
+        }
     });
 
     info!(
@@ -195,7 +213,10 @@ fn main() -> Result<()> {
         Command::TcpFmriProcess {
             fmri_dir,
             output_dir,
-            subjects,
+            cortical_lut,
+            subcortical_lut,
+            subject_file,
+            force,
         } => {
             let mut p = cfg.tcp_fmri_process;
 
@@ -205,10 +226,17 @@ fn main() -> Result<()> {
             if let Some(v) = output_dir {
                 p.output_dir = v
             };
-            if let Some(ref v) = subjects
-                && !v.is_empty()
-            {
-                p.subjects = subjects;
+            if let Some(v) = cortical_lut {
+                p.cortical_atlas_lut = v
+            };
+            if let Some(v) = subcortical_lut {
+                p.subcortical_atlas_lut = v
+            };
+            if let Some(v) = subject_file {
+                p.subject_file = Some(v)
+            };
+            if force {
+                p.force = true
             };
 
             tcp_fmri_process::run(&p)
