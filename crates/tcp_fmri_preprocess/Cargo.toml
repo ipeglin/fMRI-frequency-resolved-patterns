@@ -5,9 +5,9 @@ edition = "2024"
 
 [dependencies]
 git2 = "0.18"
-hdf5 = "0.8"
 
 anyhow = { workspace = true }
+hdf5 = { workspace = true }
 ndarray = { workspace = true }
 nifti = { workspace = true }
 polars = { workspace = true }

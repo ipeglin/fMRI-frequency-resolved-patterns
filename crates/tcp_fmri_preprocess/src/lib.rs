@@ -1,7 +1,7 @@
 use anyhow::Result;
 use config::{TCPfMRIPreprocessConfig, polars_csv};
-use ndarray::{Array2, Axis, s};
-use nifti_masker::LabelsMasker;
+use ndarray::{Array2, s};
+use nifti_masker::{LabelsMasker, MaskerSignalConfig};
 use polars::prelude::*;
 use std::path::Path;
 use std::time::Instant;
@@ -126,9 +126,13 @@ pub fn run(cfg: &TCPfMRIPreprocessConfig) -> Result<()> {
                 "starting parcellation"
             );
 
+            // Signal preprocessing config: detrend and z-score standardize
+            let signal_config = MaskerSignalConfig::with_defaults();
+
             // Cortical parcellation
             let cortical_start = Instant::now();
-            let cortical_masker = LabelsMasker::new(&cfg.cortical_atlas)?;
+            let cortical_masker =
+                LabelsMasker::with_config(&cfg.cortical_atlas, signal_config.clone())?;
             let cortical_bold = cortical_masker.fit_transform(&file_path)?;
             let cortical_duration_ms = cortical_start.elapsed().as_millis();
 
@@ -139,12 +143,15 @@ pub fn run(cfg: &TCPfMRIPreprocessConfig) -> Result<()> {
                 n_timepoints = cortical_bold.shape()[1],
                 duration_ms = cortical_duration_ms,
                 atlas_path = %cfg.cortical_atlas.display(),
+                detrend = signal_config.detrend,
+                standardize = ?signal_config.standardize,
                 "parcellation completed"
             );
 
             // Subcortical parcellation
             let subcortical_start = Instant::now();
-            let subcortical_masker = LabelsMasker::new(&cfg.subcortical_atlas)?;
+            let subcortical_masker =
+                LabelsMasker::with_config(&cfg.subcortical_atlas, signal_config.clone())?;
             let subcortical_bold = subcortical_masker.fit_transform(&file_path)?;
             let subcortical_duration_ms = subcortical_start.elapsed().as_millis();
 
@@ -155,19 +162,16 @@ pub fn run(cfg: &TCPfMRIPreprocessConfig) -> Result<()> {
                 n_timepoints = subcortical_bold.shape()[1],
                 duration_ms = subcortical_duration_ms,
                 atlas_path = %cfg.subcortical_atlas.display(),
+                detrend = signal_config.detrend,
+                standardize = ?signal_config.standardize,
                 "parcellation completed"
             );
-
-            // Concatenate
-            let combined =
-                ndarray::concatenate(Axis(0), &[cortical_bold.view(), subcortical_bold.view()])?;
 
             // Debug: Print first few values
             debug!(
                 subject_key = subject_key,
                 cortical_first_roi_first_5_timepoints = ?cortical_bold.slice(s![0, ..5]),
                 subcortical_first_roi_first_5_timepoints = ?subcortical_bold.slice(s![0, ..5]),
-                combined_first_roi_first_5_timepoints = ?combined.slice(s![0, ..5]),
                 "timeseries sample values"
             );
 
@@ -175,10 +179,10 @@ pub fn run(cfg: &TCPfMRIPreprocessConfig) -> Result<()> {
             let output_subject_dir = cfg.output_dir.join(subject_key);
             std::fs::create_dir_all(&output_subject_dir)?;
 
-            let output_path = output_subject_dir.join(format!("{}_{}.h5", subject_key, task_name));
+            let output_path = output_subject_dir.join(format!("{}.h5", task_name));
 
             let write_start = Instant::now();
-            write_timeseries_h5(&output_path, &combined)?;
+            write_timeseries_h5(&output_path, &cortical_bold, &subcortical_bold)?;
             let write_duration_ms = write_start.elapsed().as_millis();
 
             let total_duration_ms = file_start.elapsed().as_millis();
@@ -194,8 +198,7 @@ pub fn run(cfg: &TCPfMRIPreprocessConfig) -> Result<()> {
                 output_file = %output_path.display(),
                 cortical_rois = cortical_bold.shape()[0],
                 subcortical_rois = subcortical_bold.shape()[0],
-                combined_rois = combined.shape()[0],
-                n_timepoints = combined.shape()[1],
+                n_timepoints = cortical_bold.shape()[1],
                 cortical_duration_ms = cortical_duration_ms,
                 subcortical_duration_ms = subcortical_duration_ms,
                 write_duration_ms = write_duration_ms,
@@ -227,20 +230,30 @@ fn parse_subject_directory_name(key: &str) -> String {
     format!("sub-{}", key.replace("_", ""))
 }
 
-fn write_timeseries_h5(path: &Path, timeseries: &Array2<f32>) -> Result<()> {
+fn write_timeseries_h5(
+    path: &Path,
+    cortical: &Array2<f32>,
+    subcortical: &Array2<f32>,
+) -> Result<()> {
     let file = hdf5::File::create(path)?;
 
-    let shape = timeseries.shape();
-
-    // Convert to standard layout to ensure contiguous memory
-    let standard = timeseries.to_owned();
-
-    let ds = file
+    // Write cortical dataset
+    let cortical_shape = cortical.shape();
+    let cortical_standard = cortical.to_owned();
+    let cortical_ds = file
         .new_dataset::<f32>()
-        .shape([shape[0], shape[1]])
-        .create("timeseries")?;
+        .shape([cortical_shape[0], cortical_shape[1]])
+        .create("tcp_cortical")?;
+    cortical_ds.write_raw(cortical_standard.as_slice().unwrap())?;
 
-    ds.write_raw(standard.as_slice().unwrap())?;
+    // Write subcortical dataset
+    let subcortical_shape = subcortical.shape();
+    let subcortical_standard = subcortical.to_owned();
+    let subcortical_ds = file
+        .new_dataset::<f32>()
+        .shape([subcortical_shape[0], subcortical_shape[1]])
+        .create("tcp_subcortical")?;
+    subcortical_ds.write_raw(subcortical_standard.as_slice().unwrap())?;
 
     Ok(())
 }
