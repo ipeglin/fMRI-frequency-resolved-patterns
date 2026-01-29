@@ -4,9 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-hdf5 = "0.8"
-
 anyhow = { workspace = true }
+hdf5 = { workspace = true }
 ndarray = { workspace = true }
 nifti = { workspace = true }
 polars = { workspace = true }
@@ -17,3 +16,5 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 config = { path = "../config" }
+fc = { path = "../fc" }
+signals = { path = "../signals" }
