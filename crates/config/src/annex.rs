@@ -44,6 +44,29 @@ pub fn is_broken_symlink<P: AsRef<Path>>(path: P) -> bool {
     }
 }
 
+/// Checks if a file is a git-annex pointer file (unfetched content).
+/// On Windows, git-annex uses pointer files instead of symlinks.
+/// These are small files containing `/annex/objects/` in their content.
+pub fn is_annex_pointer_file<P: AsRef<Path>>(path: P) -> bool {
+    let path = path.as_ref();
+    match fs::metadata(path) {
+        Ok(metadata) => {
+            if !metadata.is_file() || metadata.len() > 32768 {
+                return false;
+            }
+            match fs::read(path) {
+                Ok(bytes) => {
+                    let content = String::from_utf8_lossy(&bytes);
+                    let trimmed = content.trim();
+                    trimmed.contains("/annex/objects/") || trimmed.contains(".git/annex/objects/")
+                }
+                Err(_) => false,
+            }
+        }
+        Err(_) => false,
+    }
+}
+
 pub fn get_file_from_annex<P: AsRef<Path>>(
     local_remote: P,
     symlink_path: P,
@@ -51,10 +74,10 @@ pub fn get_file_from_annex<P: AsRef<Path>>(
     let local = local_remote.as_ref();
     let symlink = symlink_path.as_ref();
 
-    if symlink.exists() {
+    if symlink.exists() && !is_annex_pointer_file(symlink) {
         return Err(AnnexError::AlreadyExists(format!("{}", symlink.display())));
     }
-    if !is_broken_symlink(symlink) {
+    if !symlink.exists() && !is_broken_symlink(symlink) {
         return Err(AnnexError::UnbrokenSymlink(format!(
             "{}",
             symlink.display()
