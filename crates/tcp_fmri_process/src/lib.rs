@@ -110,7 +110,7 @@ pub fn run(cfg: &TCPfMRIProcessConfig) -> Result<()> {
                     total_subjects = total_subjects,
                     task_name = task_name,
                     reason = "already_processed",
-                    "skipping subject (already exists in output, use --force to reprocess)"
+                    "skipping file (already exists in output, use --force to reprocess)"
                 );
                 continue;
             }

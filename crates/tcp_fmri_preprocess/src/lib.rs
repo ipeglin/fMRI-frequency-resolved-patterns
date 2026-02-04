@@ -156,7 +156,7 @@ pub fn run(cfg: &TCPfMRIPreprocessConfig) -> Result<()> {
                     task_name = task_name,
                     reason = "already_preprocessed",
                     output_file = %output_path.display(),
-                    "skipping subject (already preprocessed, use --force to reprocess)"
+                    "skipping file (already preprocessed, use --force to reprocess)"
                 );
                 continue;
             }
