@@ -25,8 +25,12 @@ pub fn run(cfg: &TCPfMRIPreprocessConfig) -> Result<()> {
     let filter_dir = &cfg.filter_dir;
     let filtered_subjects = [
         filter_dir.join("healthy_controls.csv"),
-        filter_dir.join("low_anhedonic.csv"),
-        filter_dir.join("high_anhedonic.csv"),
+        filter_dir.join("shaps_low_anhedonic.csv"),
+        filter_dir.join("shaps_high_anhedonic.csv"),
+        filter_dir.join("teps_anticipatory_anhedonic.csv"),
+        filter_dir.join("teps_anticipatory_non_anhedonic.csv"),
+        filter_dir.join("teps_anticipatory_anhedonic.csv"),
+        filter_dir.join("teps_anticipatory_non_anhedonic.csv"),
     ];
 
     let dataframes: Vec<LazyFrame> = filtered_subjects
