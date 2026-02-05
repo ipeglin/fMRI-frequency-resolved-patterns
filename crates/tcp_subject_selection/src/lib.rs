@@ -337,11 +337,11 @@ pub fn run(cfg: &TCPSubjectSelectionConfig) -> Result<()> {
     let cp_threshold = cp_mean - 2.0 * cp_std;
 
     info!(
-        "TEPS AP stats: mean={:.2}, std={:.2}, anhedonia threshold={:.2}",
+        "TEPS-ANT stats: mean={:.2}, std={:.2}, anhedonia threshold={:.2}",
         ap_mean, ap_std, ap_threshold
     );
     info!(
-        "TEPS CP stats: mean={:.2}, std={:.2}, anhedonia threshold={:.2}",
+        "TEPS-CON stats: mean={:.2}, std={:.2}, anhedonia threshold={:.2}",
         cp_mean, cp_std, cp_threshold
     );
 
