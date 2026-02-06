@@ -242,7 +242,7 @@ pub fn run(cfg: &TCPfMRIProcessConfig) -> Result<()> {
             let fc_connectivity_data = ConnectivityData {
                 corr_matrix: fc_corr_matrix,
                 z_matrix: fc_z_matrix,
-                labels: fc_labels,
+                labels: fc_labels.clone(),
             };
             append_connectivity_h5(
                 &output_dir.join(&fc_output_file),
