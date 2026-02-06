@@ -1,3 +1,6 @@
+use ndarray::Array2;
+use polars::prelude::*;
+
 /// BOLD timeseries data for HDF5 output
 pub struct TimeseriesData {
     /// Timeseries matrix: (T time-points x N_ROIs)
