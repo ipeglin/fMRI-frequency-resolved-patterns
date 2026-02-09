@@ -8,5 +8,18 @@ dry_run = false
 [tcp_fmri_preprocess]
 fmri_dir = "/path/to/fmri"
 filter_dir = "/path/to/filter/outputs"
+output_dir = "/path/to/output"
 cortical_atlas = "path/to/cortical/atlas"
 subcortical_atlas = "path/to/subcortical/atlas"
+
+[tcp_fmri_process]
+fmri_dir = "/path/to/files"
+output_dir = "/path/to/files"
+cortical_atlas_lut = "/path/to/file"
+subcortical_atlas_lut = "/path/to/file"
+
+[istart_subject_selection]
+istart_dir = "/path/to/dataset/data"
+istart_annex_remote = "remote_annex_id"
+output_dir = "/path/to/output"
+dry_run = false

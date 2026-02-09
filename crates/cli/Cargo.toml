@@ -14,3 +14,5 @@ config = { path = "../config" }
 tcp_subject_selection = { path = "../tcp_subject_selection" }
 tcp_fmri_preprocess = { path = "../tcp_fmri_preprocess" }
 tcp_fmri_process = { path = "../tcp_fmri_process" }
+
+istart_subject_selection = { path = "../istart_subject_selection" }

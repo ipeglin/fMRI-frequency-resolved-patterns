@@ -191,28 +191,48 @@ pub fn run(cfg: &TCPSubjectSelectionConfig) -> Result<()> {
 
     let shaps_path = shaps_path.to_str().expect("File path could not be parsed"); // shadowing
 
-    // Available SHAPS
-    let shaps_df = LazyCsvReader::new(PlPath::from_str(shaps_path))
+    // Load SHAPS data and compute corrected scores from individual items
+    // shaps[1-14]a items: 0 or 1 are valid scores, -9 means unanswered
+    let shaps_item_cols: Vec<_> = (1..=14).map(|i| format!("shaps{}a", i)).collect();
+
+    let shaps_valid_df = LazyCsvReader::new(PlPath::from_str(shaps_path))
         .with_separator(b'\t')
         .with_has_header(true)
         .with_ignore_errors(true)
         .finish()?
-        .filter(col("shaps_total").neq(lit(999)))
-        .unique(Some(cols(["subjectkey"])), UniqueKeepStrategy::Any) // Get unique entries
+        .with_column(col("shaps_8a").alias("shaps8a")) // Fix typo in column 8 name
+        .filter(col("shaps_total").neq(lit(999))) // Exclude subjects with invalid total
+        .with_column(
+            // Sum only valid scores (0 or 1), treating -9 as 0
+            shaps_item_cols
+                .iter()
+                .map(|col_name| {
+                    when(col(col_name).eq(lit(0)).or(col(col_name).eq(lit(1))))
+                        .then(col(col_name))
+                        .otherwise(lit(0))
+                })
+                .reduce(|acc, expr| acc + expr)
+                .unwrap()
+                .alias("shaps_computed_total"),
+        )
+        .unique(Some(cols(["subjectkey"])), UniqueKeepStrategy::Any)
+        .select([col("subjectkey"), col("shaps_computed_total")])
+        .collect()?;
+
+    // Available SHAPS subjects
+    let shaps_df = shaps_valid_df
+        .clone()
+        .lazy()
         .select([col("subjectkey")])
         .collect()?;
 
     polars_csv::write_dataframe(filter_output_dir.join("shaps.csv"), &shaps_df)?;
 
-    // Non-anhedonic
-    let non_anhedonic_df = LazyCsvReader::new(PlPath::from_str(shaps_path))
-        .with_separator(b'\t')
-        .with_has_header(true)
-        .with_ignore_errors(true)
-        .finish()?
-        .filter(col("shaps_total").neq(lit(999)))
-        .filter(col("shaps_total").lt(lit(3))) // non-anhedonic scores are 0–2
-        .unique(Some(cols(["subjectkey"])), UniqueKeepStrategy::Any) // Get unique entries
+    // Non-anhedonic: computed scores are 0–2
+    let non_anhedonic_df = shaps_valid_df
+        .clone()
+        .lazy()
+        .filter(col("shaps_computed_total").lt(lit(3)))
         .select([col("subjectkey")])
         .collect()?;
 
@@ -221,29 +241,21 @@ pub fn run(cfg: &TCPSubjectSelectionConfig) -> Result<()> {
         &non_anhedonic_df,
     )?;
 
-    // Anhedonic subjects
-    let anhedonic_df = LazyCsvReader::new(PlPath::from_str(shaps_path))
-        .with_separator(b'\t')
-        .with_has_header(true)
-        .with_ignore_errors(true)
-        .finish()?
-        .filter(col("shaps_total").neq(lit(999)))
-        .filter(col("shaps_total").gt_eq(lit(3))) // anhedonic scores are 3–14
-        .unique(Some(cols(["subjectkey"])), UniqueKeepStrategy::Any) // Get unique entries
+    // Anhedonic subjects: computed scores are 3–14
+    let anhedonic_df = shaps_valid_df
+        .clone()
+        .lazy()
+        .filter(col("shaps_computed_total").gt_eq(lit(3)))
         .select([col("subjectkey")])
         .collect()?;
 
     polars_csv::write_dataframe(filter_output_dir.join("shaps_anhedonic.csv"), &anhedonic_df)?;
 
-    // Low-anhedonic subjects
-    let low_anhedonic_df = LazyCsvReader::new(PlPath::from_str(shaps_path))
-        .with_separator(b'\t')
-        .with_has_header(true)
-        .with_ignore_errors(true)
-        .finish()?
-        .filter(col("shaps_total").neq(lit(999)))
-        .filter(col("shaps_total").gt_eq(lit(3))) // low-anhedonic scores are 3–14
-        .unique(Some(cols(["subjectkey"])), UniqueKeepStrategy::Any) // Get unique entries
+    // Low-anhedonic subjects: computed scores are 3–14
+    let low_anhedonic_df = shaps_valid_df
+        .clone()
+        .lazy()
+        .filter(col("shaps_computed_total").gt_eq(lit(3)))
         .select([col("subjectkey")])
         .collect()?;
 
@@ -252,15 +264,10 @@ pub fn run(cfg: &TCPSubjectSelectionConfig) -> Result<()> {
         &low_anhedonic_df,
     )?;
 
-    // High-anhedonic subjects
-    let high_anhedonic_df = LazyCsvReader::new(PlPath::from_str(shaps_path))
-        .with_separator(b'\t')
-        .with_has_header(true)
-        .with_ignore_errors(true)
-        .finish()?
-        .filter(col("shaps_total").neq(lit(999)))
-        .filter(col("shaps_total").gt_eq(lit(3))) // low-anhedonic scores are 3–14
-        .unique(Some(cols(["subjectkey"])), UniqueKeepStrategy::Any) // Get unique entries
+    // High-anhedonic subjects: computed scores are 3–14
+    let high_anhedonic_df = shaps_valid_df
+        .lazy()
+        .filter(col("shaps_computed_total").gt_eq(lit(3)))
         .select([col("subjectkey")])
         .collect()?;
 
@@ -296,16 +303,29 @@ pub fn run(cfg: &TCPSubjectSelectionConfig) -> Result<()> {
 
     let teps_path = teps_path.to_str().expect("File path could not be parsed"); // shadowing
 
-    // Load TEPS data once with scores, filtering out 999 values
+    // Declare TEPS score categories
+    // TCP teps[1-18] maps to ISTART score_teps_q[1-18]
+    let anticipatory_cols =
+        ["1", "3", "7", "11", "12", "14", "15", "16", "17", "18"].map(|i| format!("teps{}", i));
+    let consummatory_cols =
+        ["2", "4", "5", "6", "8", "9", "10", "13"].map(|i| format!("teps{}", i));
+
+    // Load TEPS data with all score columns
+    let mut select_exprs: Vec<Expr> = vec![col("subjectkey")];
+    select_exprs.extend(
+        anticipatory_cols
+            .iter()
+            .chain(consummatory_cols.iter())
+            .map(|c| col(c)),
+    );
+
     let teps_valid_df = LazyCsvReader::new(PlPath::from_str(teps_path))
         .with_separator(b'\t')
         .with_has_header(true)
         .with_ignore_errors(true)
         .finish()?
-        .filter(col("teps_ap").neq(lit(999))) // Anticipatory Pleasure Score
-        .filter(col("teps_cp").neq(lit(999))) // Consummatory Pleasure Score
         .unique(Some(cols(["subjectkey"])), UniqueKeepStrategy::Any)
-        .select([col("subjectkey"), col("teps_ap"), col("teps_cp")])
+        .select(select_exprs)
         .collect()?;
 
     // Available TEPS subjects
@@ -316,40 +336,83 @@ pub fn run(cfg: &TCPSubjectSelectionConfig) -> Result<()> {
         .collect()?;
     polars_csv::write_dataframe(filter_output_dir.join("teps.csv"), &teps_df)?;
 
-    // Compute mean and std for anticipatory and consummatory pleasure scores
-    let teps_stats = teps_valid_df
+    // Compute per-participant mean for anticipatory and consummatory scores.
+    // Manually compute mean: sum valid scores and divide by count of non-null values
+    let teps_scored_df = teps_valid_df
+        .lazy()
+        .with_columns([
+            // Anticipatory mean
+            (anticipatory_cols
+                .iter()
+                .map(|c| col(c).cast(DataType::Float64))
+                .reduce(|acc, expr| acc + expr)
+                .unwrap()
+                / anticipatory_cols
+                    .iter()
+                    .map(|c| col(c).is_not_null().cast(DataType::Float64))
+                    .reduce(|acc, expr| acc + expr)
+                    .unwrap())
+            .alias("teps_ant_mean"),
+            // Consummatory mean
+            (consummatory_cols
+                .iter()
+                .map(|c| col(c).cast(DataType::Float64))
+                .reduce(|acc, expr| acc + expr)
+                .unwrap()
+                / consummatory_cols
+                    .iter()
+                    .map(|c| col(c).is_not_null().cast(DataType::Float64))
+                    .reduce(|acc, expr| acc + expr)
+                    .unwrap())
+            .alias("teps_con_mean"),
+        ])
+        .select([
+            col("subjectkey"),
+            col("teps_ant_mean"),
+            col("teps_con_mean"),
+        ])
+        // Drop participants where both means are null (all scores were invalid)
+        .filter(
+            col("teps_ant_mean")
+                .is_not_null()
+                .or(col("teps_con_mean").is_not_null()),
+        )
+        .collect()?;
+
+    // Compute population-level mean and std for each subscale
+    let teps_stats = teps_scored_df
         .clone()
         .lazy()
         .select([
-            col("teps_ap").mean().alias("ap_mean"),
-            col("teps_ap").std(1).alias("ap_std"),
-            col("teps_cp").mean().alias("cp_mean"),
-            col("teps_cp").std(1).alias("cp_std"),
+            col("teps_ant_mean").mean().alias("ant_mean"),
+            col("teps_ant_mean").std(1).alias("ant_std"),
+            col("teps_con_mean").mean().alias("con_mean"),
+            col("teps_con_mean").std(1).alias("con_std"),
         ])
         .collect()?;
 
-    let ap_mean = teps_stats.column("ap_mean")?.f64()?.get(0).unwrap();
-    let ap_std = teps_stats.column("ap_std")?.f64()?.get(0).unwrap();
-    let cp_mean = teps_stats.column("cp_mean")?.f64()?.get(0).unwrap();
-    let cp_std = teps_stats.column("cp_std")?.f64()?.get(0).unwrap();
+    let ant_mean = teps_stats.column("ant_mean")?.f64()?.get(0).unwrap();
+    let ant_std = teps_stats.column("ant_std")?.f64()?.get(0).unwrap();
+    let con_mean = teps_stats.column("con_mean")?.f64()?.get(0).unwrap();
+    let con_std = teps_stats.column("con_std")?.f64()?.get(0).unwrap();
 
-    let ap_threshold = ap_mean - 2.0 * ap_std;
-    let cp_threshold = cp_mean - 2.0 * cp_std;
+    let ant_threshold = ant_mean - 2.0 * ant_std;
+    let con_threshold = con_mean - 2.0 * con_std;
 
     info!(
         "TEPS-ANT stats: mean={:.2}, std={:.2}, anhedonia threshold={:.2}",
-        ap_mean, ap_std, ap_threshold
+        ant_mean, ant_std, ant_threshold
     );
     info!(
         "TEPS-CON stats: mean={:.2}, std={:.2}, anhedonia threshold={:.2}",
-        cp_mean, cp_std, cp_threshold
+        con_mean, con_std, con_threshold
     );
 
-    // Anticipatory anhedonic: scoring more than 2 SD below mean on teps_ap
-    let teps_anticipatory_anhedonic_df = teps_valid_df
+    // Anticipatory anhedonic: scoring more than 2 SD below mean on teps_ant_mean
+    let teps_anticipatory_anhedonic_df = teps_scored_df
         .clone()
         .lazy()
-        .filter(col("teps_ap").lt(lit(ap_threshold)))
+        .filter(col("teps_ant_mean").lt(lit(ant_threshold)))
         .select([col("subjectkey")])
         .collect()?;
 
@@ -358,11 +421,11 @@ pub fn run(cfg: &TCPSubjectSelectionConfig) -> Result<()> {
         &teps_anticipatory_anhedonic_df,
     )?;
 
-    // Anticipatory non-anhedonic: scoring at or above the threshold on teps_ap
-    let teps_anticipatory_non_anhedonic_df = teps_valid_df
+    // Anticipatory non-anhedonic: scoring at or above the threshold on teps_ant_mean
+    let teps_anticipatory_non_anhedonic_df = teps_scored_df
         .clone()
         .lazy()
-        .filter(col("teps_ap").gt_eq(lit(ap_threshold)))
+        .filter(col("teps_ant_mean").gt_eq(lit(ant_threshold)))
         .select([col("subjectkey")])
         .collect()?;
 
@@ -371,11 +434,11 @@ pub fn run(cfg: &TCPSubjectSelectionConfig) -> Result<()> {
         &teps_anticipatory_non_anhedonic_df,
     )?;
 
-    // Consummatory anhedonic: scoring more than 2 SD below mean on teps_cp
-    let teps_consummatory_anhedonic_df = teps_valid_df
+    // Consummatory anhedonic: scoring more than 2 SD below mean on teps_con_mean
+    let teps_consummatory_anhedonic_df = teps_scored_df
         .clone()
         .lazy()
-        .filter(col("teps_cp").lt(lit(cp_threshold)))
+        .filter(col("teps_con_mean").lt(lit(con_threshold)))
         .select([col("subjectkey")])
         .collect()?;
 
@@ -384,10 +447,10 @@ pub fn run(cfg: &TCPSubjectSelectionConfig) -> Result<()> {
         &teps_consummatory_anhedonic_df,
     )?;
 
-    // Consummatory non-anhedonic: scoring at or above the threshold on teps_cp
-    let teps_consummatory_non_anhedonic_df = teps_valid_df
+    // Consummatory non-anhedonic: scoring at or above the threshold on teps_con_mean
+    let teps_consummatory_non_anhedonic_df = teps_scored_df
         .lazy()
-        .filter(col("teps_cp").gt_eq(lit(cp_threshold)))
+        .filter(col("teps_con_mean").gt_eq(lit(con_threshold)))
         .select([col("subjectkey")])
         .collect()?;
 

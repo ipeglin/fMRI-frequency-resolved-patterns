@@ -1,7 +1,9 @@
 pub mod annex;
+pub mod istart_config;
 pub mod polars_csv;
 pub mod tcp_config;
 
+pub use istart_config::ISTARTSubjectSelectionConfig;
 pub use tcp_config::{TCPSubjectSelectionConfig, TCPfMRIPreprocessConfig, TCPfMRIProcessConfig};
 
 use anyhow::{Context, Result};
@@ -16,6 +18,8 @@ pub struct AppConfig {
     pub tcp_fmri_preprocess: TCPfMRIPreprocessConfig,
     #[serde(default)]
     pub tcp_fmri_process: TCPfMRIProcessConfig,
+    #[serde(default)]
+    pub istart_subject_selection: ISTARTSubjectSelectionConfig,
 }
 
 pub fn load_config(path: &Path) -> Result<AppConfig> {

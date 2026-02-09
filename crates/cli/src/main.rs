@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use config::{
-    AppConfig, TCPSubjectSelectionConfig, TCPfMRIPreprocessConfig, TCPfMRIProcessConfig,
-    load_config,
+    AppConfig, ISTARTSubjectSelectionConfig, TCPSubjectSelectionConfig, TCPfMRIPreprocessConfig,
+    TCPfMRIProcessConfig, load_config,
 };
 use std::path::PathBuf;
 use tracing::info;
@@ -96,6 +96,19 @@ enum Command {
         #[arg(long, short = 'f')]
         force: bool,
     },
+    IstartSelectSubjects {
+        #[arg(long)]
+        istart_dir: Option<PathBuf>,
+
+        #[arg(long)]
+        istart_annex_remote: Option<String>,
+
+        #[arg(long)]
+        output_dir: Option<PathBuf>,
+
+        #[arg(long)]
+        dry_run: Option<bool>,
+    },
 }
 
 fn init_logging(level: &str, format: LogFormat) {
@@ -139,6 +152,7 @@ fn main() -> Result<()> {
             tcp_subject_selection: TCPSubjectSelectionConfig::default(),
             tcp_fmri_preprocess: TCPfMRIPreprocessConfig::default(),
             tcp_fmri_process: TCPfMRIProcessConfig::default(),
+            istart_subject_selection: ISTARTSubjectSelectionConfig::default(),
         }
     });
 
@@ -248,6 +262,30 @@ fn main() -> Result<()> {
             };
 
             tcp_fmri_process::run(&p)
+        }
+        Command::IstartSelectSubjects {
+            istart_dir,
+            istart_annex_remote,
+            output_dir,
+            dry_run,
+        } => {
+            let mut p = cfg.istart_subject_selection;
+
+            if let Some(v) = istart_dir {
+                p.istart_dir = v
+            };
+            if let Some(v) = output_dir {
+                p.output_dir = v
+            };
+            if let Some(v) = istart_annex_remote {
+                p.istart_annex_remote = v
+            };
+
+            if let Some(v) = dry_run {
+                p.dry_run = v
+            };
+
+            istart_subject_selection::run(&p)
         }
     }
 }
