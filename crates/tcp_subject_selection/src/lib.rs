@@ -1,7 +1,7 @@
 use anyhow::Result;
-use config::TCPSubjectSelectionConfig;
 use config::annex;
 use config::polars_csv;
+use config::TCPSubjectSelectionConfig;
 use git2::Repository;
 use polars::prelude::*;
 use std::fs;
@@ -255,7 +255,11 @@ pub fn run(cfg: &TCPSubjectSelectionConfig) -> Result<()> {
     let low_anhedonic_df = shaps_valid_df
         .clone()
         .lazy()
-        .filter(col("shaps_computed_total").gt_eq(lit(3)))
+        .filter(
+            col("shaps_computed_total")
+                .gt_eq(lit(3))
+                .and(col("shaps_computed_total").lt(lit(9))),
+        )
         .select([col("subjectkey")])
         .collect()?;
 
@@ -267,7 +271,7 @@ pub fn run(cfg: &TCPSubjectSelectionConfig) -> Result<()> {
     // High-anhedonic subjects: computed scores are 3–14
     let high_anhedonic_df = shaps_valid_df
         .lazy()
-        .filter(col("shaps_computed_total").gt_eq(lit(3)))
+        .filter(col("shaps_computed_total").gt_eq(lit(9)))
         .select([col("subjectkey")])
         .collect()?;
 
