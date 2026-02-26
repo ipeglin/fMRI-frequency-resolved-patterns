@@ -7,7 +7,7 @@ use fc::ConnectivityMatrix;
 use ndarray::{Array2, Array3};
 use polars::prelude::*;
 use signals::admm::ADMMConfig;
-use signals::mvmd::{MVMD, MVMDResult};
+use signals::mvmd::{MVMDResult, MVMD};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -134,14 +134,14 @@ pub fn run(cfg: &TCPfMRIProcessConfig) -> Result<()> {
                 }
             };
 
-            // Load cortical timeseries dataset
+            // Load cortical timeseries dataset (detrended + z-score standardized variant)
             let load_start = Instant::now();
-            let cortical_ds = h5_file.dataset("tcp_cortical")?;
+            let cortical_ds = h5_file.dataset("tcp_cortical_detrended_standardized")?;
             let cortical_shape = cortical_ds.shape();
             let cortical_data = cortical_ds.read_2d::<f32>()?;
 
-            // Load subcortical timeseries dataset
-            let subcortical_ds = h5_file.dataset("tcp_subcortical")?;
+            // Load subcortical timeseries dataset (detrended + z-score standardized variant)
+            let subcortical_ds = h5_file.dataset("tcp_subcortical_detrended_standardized")?;
             let subcortical_shape = subcortical_ds.shape();
             let subcortical_data = subcortical_ds.read_2d::<f32>()?;
             let load_duration_ms = load_start.elapsed().as_millis();

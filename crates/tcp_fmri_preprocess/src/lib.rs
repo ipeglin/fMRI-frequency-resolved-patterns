@@ -1,7 +1,7 @@
 use anyhow::Result;
-use config::{TCPfMRIPreprocessConfig, polars_csv};
-use ndarray::{Array2, s};
-use nifti_masker::{LabelsMasker, MaskerSignalConfig};
+use config::{polars_csv, TCPfMRIPreprocessConfig};
+use ndarray::{s, Array2};
+use nifti_masker::{preprocess_signals, LabelsMasker, MaskerSignalConfig, Standardize};
 use polars::prelude::*;
 use std::path::Path;
 use std::time::Instant;
@@ -170,53 +170,74 @@ pub fn run(cfg: &TCPfMRIPreprocessConfig) -> Result<()> {
                 "starting parcellation"
             );
 
-            // Signal preprocessing config: detrend and z-score standardize
-            let signal_config = MaskerSignalConfig::with_defaults();
+            // Extract raw (no preprocessing) parcellated signals from each atlas.
+            // All preprocessing variants are derived from these raw arrays so that
+            // the NIfTI file is only read and resampled once per atlas.
+            let raw_config = MaskerSignalConfig::default(); // detrend=false, standardize=None
 
-            // Cortical parcellation
+            // Cortical parcellation (raw)
             let cortical_start = Instant::now();
             let cortical_masker =
-                LabelsMasker::with_config(&cfg.cortical_atlas, signal_config.clone())?;
-            let cortical_bold = cortical_masker.fit_transform(&file_path)?;
+                LabelsMasker::with_config(&cfg.cortical_atlas, raw_config.clone())?;
+            let cortical_raw = cortical_masker.fit_transform(&file_path)?;
             let cortical_duration_ms = cortical_start.elapsed().as_millis();
 
             debug!(
                 subject_key = subject_key,
                 atlas_type = "cortical",
-                n_rois = cortical_bold.shape()[0],
-                n_timepoints = cortical_bold.shape()[1],
+                n_rois = cortical_raw.shape()[0],
+                n_timepoints = cortical_raw.shape()[1],
                 duration_ms = cortical_duration_ms,
                 atlas_path = %cfg.cortical_atlas.display(),
-                detrend = signal_config.detrend,
-                standardize = ?signal_config.standardize,
-                "parcellation completed"
+                "raw parcellation completed"
             );
 
-            // Subcortical parcellation
+            // Subcortical parcellation (raw)
             let subcortical_start = Instant::now();
             let subcortical_masker =
-                LabelsMasker::with_config(&cfg.subcortical_atlas, signal_config.clone())?;
-            let subcortical_bold = subcortical_masker.fit_transform(&file_path)?;
+                LabelsMasker::with_config(&cfg.subcortical_atlas, raw_config.clone())?;
+            let subcortical_raw = subcortical_masker.fit_transform(&file_path)?;
             let subcortical_duration_ms = subcortical_start.elapsed().as_millis();
 
             debug!(
                 subject_key = subject_key,
                 atlas_type = "subcortical",
-                n_rois = subcortical_bold.shape()[0],
-                n_timepoints = subcortical_bold.shape()[1],
+                n_rois = subcortical_raw.shape()[0],
+                n_timepoints = subcortical_raw.shape()[1],
                 duration_ms = subcortical_duration_ms,
                 atlas_path = %cfg.subcortical_atlas.display(),
-                detrend = signal_config.detrend,
-                standardize = ?signal_config.standardize,
-                "parcellation completed"
+                "raw parcellation completed"
             );
 
-            // Debug: Print first few values
+            // Derive all preprocessing permutations from the raw signal.
+            //
+            // Variant 1: detrend=false, standardize=None  (raw — already computed above)
+            // Variant 2: detrend=true,  standardize=None
+            // Variant 3: detrend=false, standardize=ZscoreSample
+            // Variant 4: detrend=true,  standardize=ZscoreSample  (nilearn default)
+
+            let detrended_config = MaskerSignalConfig::default().detrend(true);
+            let standardized_config =
+                MaskerSignalConfig::default().standardize(Standardize::ZscoreSample);
+            let detrended_standardized_config = MaskerSignalConfig::with_defaults();
+
+            let cortical_detrended = preprocess_signals(&cortical_raw, &detrended_config);
+            let cortical_standardized = preprocess_signals(&cortical_raw, &standardized_config);
+            let cortical_detrended_standardized =
+                preprocess_signals(&cortical_raw, &detrended_standardized_config);
+
+            let subcortical_detrended = preprocess_signals(&subcortical_raw, &detrended_config);
+            let subcortical_standardized =
+                preprocess_signals(&subcortical_raw, &standardized_config);
+            let subcortical_detrended_standardized =
+                preprocess_signals(&subcortical_raw, &detrended_standardized_config);
+
+            // Debug: Print first few raw values
             debug!(
                 subject_key = subject_key,
-                cortical_first_roi_first_5_timepoints = ?cortical_bold.slice(s![0, ..5]),
-                subcortical_first_roi_first_5_timepoints = ?subcortical_bold.slice(s![0, ..5]),
-                "timeseries sample values"
+                cortical_raw_first_roi_first_5_timepoints = ?cortical_raw.slice(s![0, ..5]),
+                subcortical_raw_first_roi_first_5_timepoints = ?subcortical_raw.slice(s![0, ..5]),
+                "raw timeseries sample values"
             );
 
             // Write output
@@ -225,7 +246,17 @@ pub fn run(cfg: &TCPfMRIPreprocessConfig) -> Result<()> {
             }
 
             let write_start = Instant::now();
-            write_timeseries_h5(&output_path, &cortical_bold, &subcortical_bold)?;
+            write_timeseries_h5(
+                &output_path,
+                &cortical_raw,
+                &subcortical_raw,
+                &cortical_detrended,
+                &subcortical_detrended,
+                &cortical_standardized,
+                &subcortical_standardized,
+                &cortical_detrended_standardized,
+                &subcortical_detrended_standardized,
+            )?;
             let write_duration_ms = write_start.elapsed().as_millis();
 
             let total_duration_ms = file_start.elapsed().as_millis();
@@ -239,9 +270,9 @@ pub fn run(cfg: &TCPfMRIPreprocessConfig) -> Result<()> {
                 task_name = task_name,
                 input_file = %file_path.display(),
                 output_file = %output_path.display(),
-                cortical_rois = cortical_bold.shape()[0],
-                subcortical_rois = subcortical_bold.shape()[0],
-                n_timepoints = cortical_bold.shape()[1],
+                cortical_rois = cortical_raw.shape()[0],
+                subcortical_rois = subcortical_raw.shape()[0],
+                n_timepoints = cortical_raw.shape()[1],
                 cortical_duration_ms = cortical_duration_ms,
                 subcortical_duration_ms = subcortical_duration_ms,
                 write_duration_ms = write_duration_ms,
@@ -273,30 +304,83 @@ fn parse_subject_directory_name(key: &str) -> String {
     format!("sub-{}", key.replace("_", ""))
 }
 
+/// Write a single 2-D cortical/subcortical pair to an open HDF5 file.
+fn write_array_pair(
+    file: &hdf5::File,
+    cortical: &Array2<f32>,
+    cortical_name: &str,
+    subcortical: &Array2<f32>,
+    subcortical_name: &str,
+) -> Result<()> {
+    let c_shape = cortical.shape();
+    let c_ds = file
+        .new_dataset::<f32>()
+        .shape([c_shape[0], c_shape[1]])
+        .create(cortical_name)?;
+    c_ds.write_raw(cortical.as_slice().unwrap())?;
+
+    let s_shape = subcortical.shape();
+    let s_ds = file
+        .new_dataset::<f32>()
+        .shape([s_shape[0], s_shape[1]])
+        .create(subcortical_name)?;
+    s_ds.write_raw(subcortical.as_slice().unwrap())?;
+
+    Ok(())
+}
+
+/// Write all four preprocessing permutations to a single HDF5 file.
+///
+/// Dataset naming convention:
+///   tcp_{cortical|subcortical}_raw                    — no detrending, no standardization
+///   tcp_{cortical|subcortical}_detrended              — detrended only
+///   tcp_{cortical|subcortical}_standardized           — z-score standardized only
+///   tcp_{cortical|subcortical}_detrended_standardized — detrended then z-score standardized
+#[allow(clippy::too_many_arguments)]
 fn write_timeseries_h5(
     path: &Path,
-    cortical: &Array2<f32>,
-    subcortical: &Array2<f32>,
+    cortical_raw: &Array2<f32>,
+    subcortical_raw: &Array2<f32>,
+    cortical_detrended: &Array2<f32>,
+    subcortical_detrended: &Array2<f32>,
+    cortical_standardized: &Array2<f32>,
+    subcortical_standardized: &Array2<f32>,
+    cortical_detrended_standardized: &Array2<f32>,
+    subcortical_detrended_standardized: &Array2<f32>,
 ) -> Result<()> {
     let file = hdf5::File::create(path)?;
 
-    // Write cortical dataset
-    let cortical_shape = cortical.shape();
-    let cortical_standard = cortical.to_owned();
-    let cortical_ds = file
-        .new_dataset::<f32>()
-        .shape([cortical_shape[0], cortical_shape[1]])
-        .create("tcp_cortical")?;
-    cortical_ds.write_raw(cortical_standard.as_slice().unwrap())?;
+    write_array_pair(
+        &file,
+        cortical_raw,
+        "tcp_cortical_raw",
+        subcortical_raw,
+        "tcp_subcortical_raw",
+    )?;
 
-    // Write subcortical dataset
-    let subcortical_shape = subcortical.shape();
-    let subcortical_standard = subcortical.to_owned();
-    let subcortical_ds = file
-        .new_dataset::<f32>()
-        .shape([subcortical_shape[0], subcortical_shape[1]])
-        .create("tcp_subcortical")?;
-    subcortical_ds.write_raw(subcortical_standard.as_slice().unwrap())?;
+    write_array_pair(
+        &file,
+        cortical_detrended,
+        "tcp_cortical_detrended",
+        subcortical_detrended,
+        "tcp_subcortical_detrended",
+    )?;
+
+    write_array_pair(
+        &file,
+        cortical_standardized,
+        "tcp_cortical_standardized",
+        subcortical_standardized,
+        "tcp_subcortical_standardized",
+    )?;
+
+    write_array_pair(
+        &file,
+        cortical_detrended_standardized,
+        "tcp_cortical_detrended_standardized",
+        subcortical_detrended_standardized,
+        "tcp_subcortical_detrended_standardized",
+    )?;
 
     Ok(())
 }
