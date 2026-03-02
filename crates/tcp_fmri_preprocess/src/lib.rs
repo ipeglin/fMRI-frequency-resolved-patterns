@@ -3,7 +3,7 @@ use config::{TCPfMRIPreprocessConfig, polars_csv};
 use ndarray::{Array2, s};
 use nifti_masker::{LabelsMasker, MaskerSignalConfig, Standardize, preprocess_signals};
 use polars::prelude::*;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tracing::{debug, info, info_span, warn};
 
@@ -101,27 +101,23 @@ pub fn run(cfg: &TCPfMRIPreprocessConfig) -> Result<()> {
             continue;
         }
 
-        let mni_results_dir = subject_dir.join("MNINonLinear").join("Results");
-        let files_to_preprocess = [
+        let suffixes = [
             // Harari-Hammer task
-            mni_results_dir
-                .join("task-hammerAP_run-01_bold")
-                .join("task-hammerAP_run-01_bold.nii.gz"),
+            "_task-hammerAP_run-01_space-MNI152NLin2009cAsym_res-2_desc-preproc_bold.nii.gz",
             // Resting state AP encoding
-            mni_results_dir
-                .join("task-restAP_run-01_bold")
-                .join("task-restAP_run-01_bold.nii.gz"),
-            mni_results_dir
-                .join("task-restAP_run-02_bold")
-                .join("task-restAP_run-02_bold.nii.gz"),
-            // Resting state PA encoding
-            mni_results_dir
-                .join("task-restPA_run-01_bold")
-                .join("task-restPA_run-01_bold.nii.gz"),
-            mni_results_dir
-                .join("task-restPA_run-02_bold")
-                .join("task-restPA_run-02_bold.nii.gz"),
+            "_task-restAP_run-01_space-MNI152NLin2009cAsym_res-2_desc-preproc_bold.nii.gz",
+            "_task-restAP_run-02_space-MNI152NLin2009cAsym_res-2_desc-preproc_bold.nii.gz",
         ];
+
+        let mni_results_dir = subject_dir.join("func");
+        let files_to_preprocess: Vec<PathBuf> = suffixes
+            .iter()
+            .map(|suffix| {
+                // Construct the filename first, then join it to the directory
+                let filename = format!("{}{}", subject_key, suffix);
+                mni_results_dir.join(filename)
+            })
+            .collect();
 
         for file_path in files_to_preprocess {
             if !file_path.exists() {
