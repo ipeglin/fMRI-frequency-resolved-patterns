@@ -114,7 +114,7 @@ pub fn run(cfg: &TCPfMRIPreprocessConfig) -> Result<()> {
             .iter()
             .map(|suffix| {
                 // Construct the filename first, then join it to the directory
-                let filename = format!("{}{}", subject_key, suffix);
+                let filename = format!("sub-{}{}", subject_key.replace("_", ""), suffix);
                 mni_results_dir.join(filename)
             })
             .collect();

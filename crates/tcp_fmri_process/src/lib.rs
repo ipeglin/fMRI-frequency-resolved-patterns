@@ -7,7 +7,7 @@ use fc::ConnectivityMatrix;
 use ndarray::{Array2, Array3};
 use polars::prelude::*;
 use signals::admm::ADMMConfig;
-use signals::mvmd::{MVMDResult, MVMD};
+use signals::mvmd::{MVMD, MVMDResult};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -48,9 +48,14 @@ pub fn run(cfg: &TCPfMRIProcessConfig) -> Result<()> {
     }
 
     // Check if fMRI file available
-    let required_scans = [String::from("task-hammerAP_run-01_bold.nii.h5")];
-    let subjects_for_processing =
-        filter_subjects_with_files(&cfg.fmri_dir, subjects_for_processing, &required_scans);
+    let required_scan_suffixes = [String::from(
+        "_task-hammerAP_run-01_space-MNI152NLin2009cAsym_res-2_desc-preproc_bold.nii.h5",
+    )];
+    let subjects_for_processing = filter_subjects_with_files(
+        &cfg.fmri_dir,
+        subjects_for_processing,
+        &required_scan_suffixes,
+    );
 
     let total_subjects = subjects_for_processing.len();
 
@@ -84,11 +89,12 @@ pub fn run(cfg: &TCPfMRIProcessConfig) -> Result<()> {
 
         let fmri_subject_dir = cfg.fmri_dir.join(subject);
 
-        for file in &required_scans {
+        for suffix in &required_scan_suffixes {
             let file_start = Instant::now();
 
             // Load HDF5 file with parcellated timeseries
-            let filepath = fmri_subject_dir.join(file);
+            let filename = format!("sub-{}{}", subject.replace("_", ""), suffix);
+            let filepath = fmri_subject_dir.join(filename);
             let file_name = filepath
                 .file_stem()
                 .and_then(|os| os.to_str())
@@ -515,13 +521,16 @@ fn filter_valid_subjects(
 fn filter_subjects_with_files(
     fmri_dir: &PathBuf,
     subjects: Vec<String>,
-    files: &[String],
+    file_suffixes: &[String],
 ) -> Vec<String> {
     subjects
         .into_iter()
         .filter(|subject| {
             let subject_dir = fmri_dir.join(subject);
-            files.iter().all(|file| subject_dir.join(file).exists())
+            file_suffixes.iter().all(|suffix| {
+                let filename = format!("sub-{}{}", subject.replace("_", ""), suffix);
+                subject_dir.join(filename).exists()
+            })
         })
         .collect()
 }
