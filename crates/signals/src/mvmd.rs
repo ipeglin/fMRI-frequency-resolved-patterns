@@ -36,9 +36,9 @@ pub struct MVMDResult {
     /// Decomposed modes with shape (K modes x C channels x T time-points)
     pub modes: Array3<f64>,
     /// Estimated mode center-frequencies over iterations (iter x K)
-    pub center_frequencies: Array2<f64>,
+    pub frequency_traces: Array2<f64>,
     /// Final center frequencies for each mode (K,)
-    pub final_frequencies: Array1<f64>,
+    pub center_frequencies: Array1<f64>,
     /// Number of iterations until convergence
     pub num_iterations: u32,
 }
@@ -75,7 +75,7 @@ impl MVMDResult {
             }
 
             let df = DataFrame::new(columns)?;
-            let center_freq = self.final_frequencies[k];
+            let center_freq = self.center_frequencies[k];
 
             result.push(ModeData {
                 mode_index: k,
@@ -443,17 +443,17 @@ impl MVMD {
             }
         }
 
-        // center_frequencies: (iter x K)
+        // frequency_traces: (iter x K)
         let n_iters = omega_result.len();
-        let mut center_frequencies = Array2::<f64>::zeros((n_iters, num_modes));
+        let mut frequency_traces = Array2::<f64>::zeros((n_iters, num_modes));
         for (i, row) in omega_result.iter().enumerate() {
             for (k, &val) in row.iter().enumerate() {
-                center_frequencies[[i, k]] = val;
+                frequency_traces[[i, k]] = val;
             }
         }
 
-        // final_frequencies: (K,)
-        let final_frequencies = if n_iters > 0 {
+        // center_frequencies: (K,)
+        let center_frequencies = if n_iters > 0 {
             Array1::from_vec(omega_result[n_iters - 1].clone())
         } else {
             Array1::zeros(num_modes)
@@ -462,15 +462,15 @@ impl MVMD {
         info!(
             num_iterations = n as u32,
             modes_shape = ?[num_modes, self.num_channels, n_timepoints],
-            final_frequencies = ?final_frequencies.as_slice(),
+            center_frequencies = ?center_frequencies.as_slice(),
             "MVMD decomposition completed"
         );
 
         MVMDResult {
             channels: self.channels.clone(),
             modes,
+            frequency_traces,
             center_frequencies,
-            final_frequencies,
             num_iterations: n as u32,
         }
     }
@@ -625,10 +625,10 @@ mod tests {
         assert!(result.num_iterations > 0);
         assert!(result.num_iterations <= 500);
 
-        // Check center_frequencies shape: (n_iters, K=2)
-        assert_eq!(result.center_frequencies.shape()[1], 2);
+        // Check frequency_traces shape: (n_iters, K=2)
+        assert_eq!(result.frequency_traces.shape()[1], 2);
 
-        // Check final_frequencies shape: (K=2,)
-        assert_eq!(result.final_frequencies.len(), 2);
+        // Check center_frequencies shape: (K=2,)
+        assert_eq!(result.center_frequencies.len(), 2);
     }
 }
