@@ -440,8 +440,10 @@ dependencies = [
  "anyhow",
  "clap",
  "config",
- "tcp_fmri_preprocess",
+ "tcp_fmri_parcellation",
  "tcp_fmri_process",
+ "tcp_fmri_segment_trials",
+ "tcp_mvmd",
  "tcp_subject_selection",
  "tracing",
  "tracing-subscriber",
@@ -1046,6 +1048,14 @@ dependencies = [
  "cfg-if",
  "hdf5-sys",
  "libc",
+]
+
+[[package]]
+name = "hdf5_io"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hdf5",
 ]
 
 [[package]]
@@ -3326,7 +3336,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tcp_fmri_preprocess"
+name = "tcp_fmri_parcellation"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -3352,10 +3362,47 @@ dependencies = [
  "config",
  "fc",
  "hdf5",
+ "hdf5_io",
  "ndarray 0.15.6",
  "nifti",
  "polars",
  "polars-io",
+ "serde",
+ "serde_json",
+ "signals",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "tcp_fmri_segment_trials"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "config",
+ "hdf5",
+ "ndarray 0.15.6",
+ "polars",
+ "polars-io",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "tcp_mvmd"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "config",
+ "hdf5",
+ "hdf5_io",
+ "ndarray 0.15.6",
+ "polars",
+ "polars-io",
+ "regex",
  "serde",
  "serde_json",
  "signals",

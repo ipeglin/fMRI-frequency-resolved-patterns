@@ -7,8 +7,11 @@ members = [
   "crates/signals",
   "crates/nifti_masker",
   "crates/tcp_subject_selection",
-  "crates/tcp_fmri_preprocess",
+  "crates/tcp_fmri_parcellation",
+  "crates/tcp_fmri_segment_trials",
+  "crates/tcp_mvmd",
   "crates/tcp_fmri_process",
+  "crates/hdf5_io",
 ]
 
 [workspace.dependencies]
@@ -16,8 +19,9 @@ anyhow = "1"
 hdf5 = "0.8"
 ndarray = "0.15.6"
 nifti = { version = "0.17.0", features = ["ndarray_volumes", "ndarray"] }
-polars  = { version = "0.52.0", features = ["csv", "lazy", "regex", "timezones", "strings", "dtype-full", "round_series", "trigonometry", "polars-ops"] }
+polars  = { version = "0.52.0", features = ["csv", "lazy", "regex", "timezones", "strings", "dtype-full", "round_series", "trigonometry", "polars-ops", "cum_agg"] }
 polars-io = "0.52.0"
+regex = "1.10.4"
 rustfft = "6.4.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

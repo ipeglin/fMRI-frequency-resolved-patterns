@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use config::{
-    AppConfig, TCPSubjectSelectionConfig, TCPfMRIPreprocessConfig, TCPfMRIProcessConfig,
-    load_config,
+    AppConfig, TcpFmriParcellationConfig, TcpFmriProcessConfig, TcpMvmdConfig,
+    TcpSubjectSelectionConfig, TcpTrialSegmentationConfig, load_config,
 };
 use std::path::PathBuf;
 use tracing::info;
@@ -37,7 +37,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    TcpSelectSubjects {
+    SelectSubjects {
         #[arg(long)]
         tcp_dir: Option<PathBuf>,
 
@@ -53,7 +53,7 @@ enum Command {
         #[arg(long)]
         dry_run: Option<bool>,
     },
-    TcpFmriPreprocess {
+    ParcellateBold {
         #[arg(long)]
         fmri_dir: Option<PathBuf>,
 
@@ -76,9 +76,33 @@ enum Command {
         #[arg(long, short = 'f')]
         force: bool,
     },
+    SegmentTrials {
+        #[arg(long)]
+        tcp_dir: Option<PathBuf>,
+
+        #[arg(long)]
+        bold_ts_dir: Option<PathBuf>,
+
+        #[arg(long)]
+        glm_output_dir: Option<PathBuf>,
+    },
+    DecomposeMvmd {
+        #[arg(long)]
+        tcp_dir: Option<PathBuf>,
+
+        #[arg(long)]
+        bold_ts_dir: Option<PathBuf>,
+
+        #[arg(long)]
+        num_modes: Option<u8>,
+
+        /// Force reprocessing of subjects that already exist in output files
+        #[arg(long, short = 'f')]
+        force: bool,
+    },
     TcpFmriProcess {
         #[arg(long)]
-        fmri_dir: Option<PathBuf>,
+        bold_ts_dir: Option<PathBuf>,
 
         #[arg(long)]
         output_dir: Option<PathBuf>,
@@ -136,9 +160,11 @@ fn main() -> Result<()> {
         );
         eprintln!("Using default configuration values");
         AppConfig {
-            tcp_subject_selection: TCPSubjectSelectionConfig::default(),
-            tcp_fmri_preprocess: TCPfMRIPreprocessConfig::default(),
-            tcp_fmri_process: TCPfMRIProcessConfig::default(),
+            tcp_subject_selection: TcpSubjectSelectionConfig::default(),
+            tcp_fmri_parcellation: TcpFmriParcellationConfig::default(),
+            tcp_fmri_segment_trials: TcpTrialSegmentationConfig::default(),
+            tcp_mvmd: TcpMvmdConfig::default(),
+            tcp_fmri_process: TcpFmriProcessConfig::default(),
         }
     });
 
@@ -150,7 +176,7 @@ fn main() -> Result<()> {
     );
 
     match cli.cmd {
-        Command::TcpSelectSubjects {
+        Command::SelectSubjects {
             tcp_dir,
             tcp_annex_remote,
             output_dir,
@@ -181,7 +207,7 @@ fn main() -> Result<()> {
 
             tcp_subject_selection::run(&p)
         }
-        Command::TcpFmriPreprocess {
+        Command::ParcellateBold {
             fmri_dir,
             filter_dir,
             output_dir,
@@ -190,7 +216,7 @@ fn main() -> Result<()> {
             dry_run,
             force,
         } => {
-            let mut p = cfg.tcp_fmri_preprocess;
+            let mut p = cfg.tcp_fmri_parcellation;
 
             if let Some(v) = fmri_dir {
                 p.fmri_dir = v
@@ -216,10 +242,57 @@ fn main() -> Result<()> {
                 p.force = true
             };
 
-            tcp_fmri_preprocess::run(&p)
+            tcp_fmri_parcellation::run(&p)
+        }
+        Command::SegmentTrials {
+            tcp_dir,
+            bold_ts_dir,
+            glm_output_dir,
+        } => {
+            let mut p = cfg.tcp_fmri_segment_trials;
+
+            if let Some(v) = tcp_dir {
+                p.tcp_dir = v
+            }
+
+            if let Some(v) = bold_ts_dir {
+                p.bold_ts_dir = v
+            }
+
+            if let Some(v) = glm_output_dir {
+                p.glm_output_dir = v
+            }
+
+            tcp_fmri_segment_trials::run(&p)
+        }
+        Command::DecomposeMvmd {
+            tcp_dir,
+            bold_ts_dir,
+            num_modes,
+            force,
+        } => {
+            let mut p = cfg.tcp_mvmd;
+
+            if let Some(v) = tcp_dir {
+                p.tcp_dir = v
+            }
+
+            if let Some(v) = bold_ts_dir {
+                p.bold_ts_dir = v
+            }
+
+            if let Some(v) = num_modes {
+                p.num_modes = v as usize
+            }
+
+            if force {
+                p.force = true
+            };
+
+            tcp_mvmd::run(&p)
         }
         Command::TcpFmriProcess {
-            fmri_dir,
+            bold_ts_dir,
             output_dir,
             cortical_lut,
             subcortical_lut,
@@ -228,8 +301,8 @@ fn main() -> Result<()> {
         } => {
             let mut p = cfg.tcp_fmri_process;
 
-            if let Some(v) = fmri_dir {
-                p.fmri_dir = v
+            if let Some(v) = bold_ts_dir {
+                p.bold_ts_dir = v
             };
             if let Some(v) = output_dir {
                 p.output_dir = v
