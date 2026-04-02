@@ -1,6 +1,7 @@
 use anyhow::Result;
+use config::TcpTrialSegmentationConfig;
 use config::bids_filename::BidsFilename;
-use config::TCPTrialSegmentationConfig;
+use config::bids_subject_id::BidsSubjectId;
 use hdf5::types::VarLenUnicode;
 use ndarray::{Array2, s};
 use polars::prelude::*;
@@ -36,7 +37,7 @@ pub struct GlmConditions {
     pub block_level: BTreeMap<String, (Vec<f64>, Vec<f64>)>,
 }
 
-pub fn run(cfg: &TCPTrialSegmentationConfig) -> Result<()> {
+pub fn run(cfg: &TcpTrialSegmentationConfig) -> Result<()> {
     let _run_start = Instant::now();
 
     // Disable HDF5 advisory file locking — required on macOS and some networked filesystems
@@ -45,28 +46,26 @@ pub fn run(cfg: &TCPTrialSegmentationConfig) -> Result<()> {
 
     info!(
         tcp_dir = % cfg.tcp_dir.display(),
-        fmri_ts_dir = %cfg.fmri_ts_dir.display(),
+        bold_ts_dir = %cfg.bold_ts_dir.display(),
         glm_output_dir = %cfg.glm_output_dir.display(),
         "starting fMRI trial segmentation"
     );
 
     // BTreeMap<formatted_subject_id, subject_dir>
-    let subjects: BTreeMap<String, PathBuf> = fs::read_dir(&cfg.fmri_ts_dir)?
+    let subjects: BTreeMap<String, PathBuf> = fs::read_dir(&cfg.bold_ts_dir)?
         .filter_map(|entry_result| entry_result.ok())
         .filter_map(|entry| {
             let path = entry.path();
             if !path.is_dir() {
                 return None;
             }
-            let id = path.file_name()?.to_str()?.to_string();
-            let formatted = format!("sub-{}", id.replace("_", ""));
+            let id = path.file_name()?.to_str()?;
+            let formatted = BidsSubjectId::parse(id).to_dir_name();
             Some((formatted, path))
         })
         .collect();
 
     info!(num_subjects = subjects.len(), "found subject directories");
-
-    let desired_file_keys = ["sub", "task", "run"];
 
     for (formatted_id, dir) in &subjects {
         let available_task_timeseries: Vec<PathBuf> = fs::read_dir(dir)?
@@ -74,17 +73,17 @@ pub fn run(cfg: &TCPTrialSegmentationConfig) -> Result<()> {
             .map(|entry| entry.path())
             .filter(|path| path.is_file())
             .filter_map(|path| {
-                let p = path.file_name()?.to_str()?.to_string();
-                if p.contains(".h5") { Some(path) } else { None }
-            })
-            .filter_map(|path| {
-                let p = path.file_name()?.to_str()?.to_string();
-                if !p.contains("rest") {
+                let name = path.file_name()?.to_str()?;
+                if !name.ends_with(".h5") {
+                    return None;
+                }
+                let parsed = BidsFilename::parse(name);
+                if parsed.get("task") == Some("hammerAP") {
                     Some(path)
                 } else {
                     info!(
-                      file = %path.file_stem().and_then(|n| n.to_str())?,
-                      "Skipping resting-state file. No related events."
+                        file = %path.file_stem().and_then(|n| n.to_str())?,
+                        "skipping non-hammerAP file"
                     );
                     None
                 }
@@ -97,9 +96,11 @@ pub fn run(cfg: &TCPTrialSegmentationConfig) -> Result<()> {
                 None => continue,
             };
 
-            let event_file_base = BidsFilename::parse(filename_without_extension)
-                .keep(&desired_file_keys)
-                .to_stem();
+            let event_file_base = {
+                let mut b = BidsFilename::parse(filename_without_extension).keep(&["task", "run"]);
+                b.suffix = None;
+                format!("{}_{}", formatted_id, b.to_stem())
+            };
             let event_file_name = format!("{}_events.tsv", event_file_base);
             let event_file = &cfg
                 .tcp_dir
