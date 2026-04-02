@@ -1,9 +1,13 @@
 pub mod annex;
 pub mod bids_filename;
+pub mod bids_subject_id;
 pub mod polars_csv;
 pub mod tcp_config;
 
-pub use tcp_config::{TCPSubjectSelectionConfig, TCPfMRIPreprocessConfig, TCPfMRIProcessConfig};
+pub use tcp_config::{
+    TcpFmriParcellationConfig, TcpFmriProcessConfig, TcpMvmdConfig, TcpSubjectSelectionConfig,
+    TcpTrialSegmentationConfig,
+};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -12,11 +16,15 @@ use std::path::Path;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
-    pub tcp_subject_selection: TCPSubjectSelectionConfig,
+    pub tcp_subject_selection: TcpSubjectSelectionConfig,
     #[serde(default)]
-    pub tcp_fmri_preprocess: TCPfMRIPreprocessConfig,
+    pub tcp_fmri_parcellation: TcpFmriParcellationConfig,
     #[serde(default)]
-    pub tcp_fmri_process: TCPfMRIProcessConfig,
+    pub tcp_fmri_segment_trials: TcpTrialSegmentationConfig,
+    #[serde(default)]
+    pub tcp_mvmd: TcpMvmdConfig,
+    #[serde(default)]
+    pub tcp_fmri_process: TcpFmriProcessConfig,
 }
 
 pub fn load_config(path: &Path) -> Result<AppConfig> {

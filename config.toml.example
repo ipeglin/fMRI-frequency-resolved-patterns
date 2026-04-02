@@ -5,7 +5,7 @@ output_dir = "/path/to/subject/output"
 filters = ["available_demos_filter", "available_shaps_filter"]
 dry_run = false
 
-[tcp_fmri_preprocess]
+[tcp_fmri_parcellation]
 fmri_dir = "/path/to/fmri"
 filter_dir = "/path/to/filter/outputs"
 output_dir = "/path/to/output"

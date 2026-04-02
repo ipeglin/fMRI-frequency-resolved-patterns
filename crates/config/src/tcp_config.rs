@@ -3,7 +3,7 @@ use std::{fmt, path::PathBuf};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TCPSubjectSelectionConfig {
+pub struct TcpSubjectSelectionConfig {
     pub tcp_dir: PathBuf,
     pub tcp_annex_remote: String,
     pub output_dir: PathBuf,
@@ -13,7 +13,7 @@ pub struct TCPSubjectSelectionConfig {
     pub dry_run: bool,
 }
 
-impl Default for TCPSubjectSelectionConfig {
+impl Default for TcpSubjectSelectionConfig {
     fn default() -> Self {
         Self {
             tcp_dir: PathBuf::from("/path/to/tcp"),
@@ -25,7 +25,7 @@ impl Default for TCPSubjectSelectionConfig {
     }
 }
 
-impl fmt::Display for TCPSubjectSelectionConfig {
+impl fmt::Display for TcpSubjectSelectionConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "TPC Subject Selection:")?;
         writeln!(f, "  TCP Dir: {}", self.tcp_dir.display())?;
@@ -42,7 +42,7 @@ impl fmt::Display for TCPSubjectSelectionConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TCPfMRIPreprocessConfig {
+pub struct TcpFmriParcellationConfig {
     pub fmri_dir: PathBuf,
     pub filter_dir: PathBuf,
     pub output_dir: PathBuf,
@@ -55,7 +55,7 @@ pub struct TCPfMRIPreprocessConfig {
     pub force: bool,
 }
 
-impl Default for TCPfMRIPreprocessConfig {
+impl Default for TcpFmriParcellationConfig {
     fn default() -> Self {
         Self {
             fmri_dir: PathBuf::from("/path/to/raw_fmri_data"),
@@ -69,7 +69,7 @@ impl Default for TCPfMRIPreprocessConfig {
     }
 }
 
-impl fmt::Display for TCPfMRIPreprocessConfig {
+impl fmt::Display for TcpFmriParcellationConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "TPC fMRI Preprocessing:")?;
         writeln!(f, "  fMRI Dir: {}", self.fmri_dir.display())?;
@@ -81,8 +81,65 @@ impl fmt::Display for TCPfMRIPreprocessConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TCPfMRIProcessConfig {
-    pub fmri_dir: PathBuf,
+pub struct TcpTrialSegmentationConfig {
+    pub tcp_dir: PathBuf,
+    pub bold_ts_dir: PathBuf,
+    /// Directory where per-condition GLM onset/duration TSV files are written.
+    pub glm_output_dir: PathBuf,
+}
+
+impl Default for TcpTrialSegmentationConfig {
+    fn default() -> Self {
+        Self {
+            tcp_dir: PathBuf::from("/path/to/tcp"),
+            bold_ts_dir: PathBuf::from("/path/to/fmri_timeseries"),
+            glm_output_dir: PathBuf::from("/path/to/glm_conditions"),
+        }
+    }
+}
+
+impl fmt::Display for TcpTrialSegmentationConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "TPC fMRI Trail Segmentation:")?;
+        writeln!(f, "  TCP Dir: {}", self.tcp_dir.display())?;
+        writeln!(f, "  fMRI Timeseries Dir: {}", self.bold_ts_dir.display())?;
+        write!(f, "  GLM Output Dir: {}", self.glm_output_dir.display())?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TcpMvmdConfig {
+    pub tcp_dir: PathBuf,
+    pub bold_ts_dir: PathBuf,
+    pub num_modes: usize,
+    #[serde(default)]
+    pub force: bool,
+}
+
+impl Default for TcpMvmdConfig {
+    fn default() -> Self {
+        Self {
+            tcp_dir: PathBuf::from("/path/to/tcp"),
+            bold_ts_dir: PathBuf::from("/path/to/fmri_timeseries"),
+            num_modes: 10 as usize,
+            force: false,
+        }
+    }
+}
+
+impl fmt::Display for TcpMvmdConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "TPC MVMD Decomposition:")?;
+        writeln!(f, "  TCP Dir: {}", self.tcp_dir.display())?;
+        writeln!(f, "  fMRI Timeseries Dir: {}", self.bold_ts_dir.display())?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TcpFmriProcessConfig {
+    pub bold_ts_dir: PathBuf,
     pub output_dir: PathBuf,
     pub cortical_atlas_lut: PathBuf,
     pub subcortical_atlas_lut: PathBuf,
@@ -93,10 +150,10 @@ pub struct TCPfMRIProcessConfig {
     pub force: bool,
 }
 
-impl Default for TCPfMRIProcessConfig {
+impl Default for TcpFmriProcessConfig {
     fn default() -> Self {
         Self {
-            fmri_dir: PathBuf::from("/path/to/raw_fmri_data"),
+            bold_ts_dir: PathBuf::from("/path/to/raw_fmri_data"),
             output_dir: PathBuf::from("/path/to/output"),
             cortical_atlas_lut: PathBuf::from("/path/to/cortical_atlas_lut"),
             subcortical_atlas_lut: PathBuf::from("/path/to/subcortical_atlas_lut"),
@@ -106,10 +163,10 @@ impl Default for TCPfMRIProcessConfig {
     }
 }
 
-impl fmt::Display for TCPfMRIProcessConfig {
+impl fmt::Display for TcpFmriProcessConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "TPC fMRI Preprocessing:")?;
-        writeln!(f, "  fMRI Dir: {}", self.fmri_dir.display())?;
+        writeln!(f, "  fMRI Dir: {}", self.bold_ts_dir.display())?;
         writeln!(f, "  Output Dir: {}", self.output_dir.display())?;
         writeln!(
             f,
