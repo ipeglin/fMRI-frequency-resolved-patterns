@@ -108,6 +108,12 @@ impl BidsFilename {
     }
 }
 
+impl std::fmt::Display for BidsFilename {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_filename())
+    }
+}
+
 /// Find all regular files directly under `dir` whose BIDS filename matches all
 /// `required_pairs`, an optional `suffix`, and an optional file `extension`.
 ///
@@ -217,5 +223,16 @@ mod tests {
         let f = BidsFilename::parse("sub-ABC_task-hammerAP_run-01_bold.h5");
         assert!(f.matches_pair("task", "hammerAP"));
         assert!(!f.matches_pair("task", "restAP"));
+    }
+
+    #[test]
+    fn display_renders_full_filename() {
+        let f = BidsFilename::parse(
+            "sub-NDARINVAL101MH2_task-hammerAP_run-01_space-MNI152NLin2009cAsym_res-2_desc-preproc_bold.h5",
+        );
+        assert_eq!(
+            format!("{}", f),
+            "sub-NDARINVAL101MH2_task-hammerAP_run-01_space-MNI152NLin2009cAsym_res-2_desc-preproc_bold.h5"
+        );
     }
 }

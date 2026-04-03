@@ -1,9 +1,9 @@
 use anyhow::Result;
-use config::TcpMvmdConfig;
+use config::MvmdConfig;
 use config::bids_filename::BidsFilename;
 use config::bids_subject_id::BidsSubjectId;
 use hdf5_io::{H5Attr, open_or_create, open_or_create_group, write_attrs, write_dataset};
-use ndarray::{Array2, concatenate, Axis};
+use ndarray::{Array2, Axis, concatenate};
 use polars::prelude::*;
 use signals::admm::ADMMConfig;
 use signals::mvmd::MVMD;
@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
-pub fn run(cfg: &TcpMvmdConfig) -> Result<()> {
+pub fn run(cfg: &MvmdConfig) -> Result<()> {
     let _run_start = Instant::now();
 
     // Disable HDF5 advisory file locking — required on macOS and some networked filesystems
@@ -227,8 +227,7 @@ pub fn run(cfg: &TcpMvmdConfig) -> Result<()> {
                 let cortical: Array2<f32> = block_group.dataset("cortical_raw")?.read_2d()?;
                 let subcortical: Array2<f32> = block_group.dataset("subcortical_raw")?.read_2d()?;
 
-                let block_signal =
-                    concatenate(Axis(0), &[cortical.view(), subcortical.view()])?;
+                let block_signal = concatenate(Axis(0), &[cortical.view(), subcortical.view()])?;
 
                 let block_columns: Vec<Column> = block_signal
                     .outer_iter()
