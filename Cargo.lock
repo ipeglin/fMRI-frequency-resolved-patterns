@@ -457,6 +457,7 @@ dependencies = [
  "tcp_fmri_parcellation",
  "tcp_fmri_process",
  "tcp_fmri_segment_trials",
+ "tcp_hht",
  "tcp_mvmd",
  "tcp_subject_selection",
  "tracing",
@@ -3907,6 +3908,24 @@ dependencies = [
  "polars",
  "polars-io",
  "regex",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "tcp_hht"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "config",
+ "fastcwt",
+ "hdf5",
+ "hdf5_io",
+ "ndarray 0.15.6",
+ "num-complex",
+ "scirs2-signal",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

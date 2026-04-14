@@ -16,4 +16,5 @@ tcp_fmri_parcellation = { path = "../01tcp_fmri_parcellation" }
 tcp_fmri_segment_trials = { path = "../02tcp_fmri_segment_trials" }
 tcp_mvmd = { path = "../03tcp_mvmd" }
 tcp_cwt = { path = "../04tcp_cwt" }
+tcp_hht = { path = "../05tcp_hilbert_huang" }
 tcp_fmri_process = { path = "../tcp_fmri_process" }

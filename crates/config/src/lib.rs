@@ -5,7 +5,7 @@ pub mod polars_csv;
 pub mod tcp_config;
 
 pub use tcp_config::{
-    CwtConfig, MvmdConfig, TcpFmriParcellationConfig, TcpFmriProcessConfig,
+    CwtConfig, HilbertHuangConfig, MvmdConfig, TcpFmriParcellationConfig, TcpFmriProcessConfig,
     TcpSubjectSelectionConfig, TcpTrialSegmentationConfig,
 };
 
@@ -25,6 +25,8 @@ pub struct AppConfig {
     pub tcp_mvmd: MvmdConfig,
     #[serde(default)]
     pub tcp_cwt: CwtConfig,
+    #[serde(default)]
+    pub tcp_hht: HilbertHuangConfig,
     #[serde(default)]
     pub tcp_fmri_process: TcpFmriProcessConfig,
 }

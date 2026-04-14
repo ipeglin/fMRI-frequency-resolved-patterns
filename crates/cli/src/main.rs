@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use config::{
-    AppConfig, CwtConfig, MvmdConfig, TcpFmriParcellationConfig, TcpFmriProcessConfig,
+    AppConfig, CwtConfig, HilbertHuangConfig, MvmdConfig, TcpFmriParcellationConfig, TcpFmriProcessConfig,
     TcpSubjectSelectionConfig, TcpTrialSegmentationConfig, load_config,
 };
 use std::path::PathBuf;
@@ -118,6 +118,13 @@ enum Command {
         #[arg(long, short = 'f')]
         force: bool,
     },
+    Hht {
+        #[arg(long)]
+        bold_ts_dir: Option<PathBuf>,
+
+        #[arg(long, short = 'f')]
+        force: bool,
+    },
     TcpFmriProcess {
         #[arg(long)]
         bold_ts_dir: Option<PathBuf>,
@@ -183,6 +190,7 @@ fn main() -> Result<()> {
             tcp_fmri_segment_trials: TcpTrialSegmentationConfig::default(),
             tcp_mvmd: MvmdConfig::default(),
             tcp_cwt: CwtConfig::default(),
+            tcp_hht: HilbertHuangConfig::default(),
             tcp_fmri_process: TcpFmriProcessConfig::default(),
         }
     });
@@ -331,6 +339,19 @@ fn main() -> Result<()> {
             }
 
             tcp_cwt::run(&p)
+        }
+        Command::Hht { bold_ts_dir, force } => {
+            let mut p = cfg.tcp_hht;
+
+            if let Some(v) = bold_ts_dir {
+                p.bold_ts_dir = v
+            }
+
+            if force {
+                p.force = true
+            }
+
+            tcp_hht::run(&p)
         }
         Command::TcpFmriProcess {
             bold_ts_dir,
