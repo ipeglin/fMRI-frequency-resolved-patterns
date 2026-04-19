@@ -13,3 +13,6 @@ config.toml
 # IDUN setup for modules
 setup_env.*
 build_hdf5.*
+
+# Pretrained CNN weight blobs (large binaries, fetched out-of-band)
+cnn_model_weights/
