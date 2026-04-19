@@ -9,6 +9,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "aes"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b169f7a6d4742236a0a00c541b845991d0ac43e546831af1249753ab4c3aa3a0"
+dependencies = [
+ "cfg-if",
+ "cipher",
+ "cpufeatures 0.2.17",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -198,6 +209,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "atlas"
+version = "0.1.0"
+
+[[package]]
 name = "atoi_simd"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -223,6 +238,12 @@ name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
+name = "base64ct"
+version = "1.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "bincode"
@@ -269,7 +290,7 @@ dependencies = [
  "arrayvec",
  "cc",
  "cfg-if",
- "constant_time_eq",
+ "constant_time_eq 0.4.2",
  "cpufeatures 0.2.17",
 ]
 
@@ -336,6 +357,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b35204fbdc0b3f4446b89fc1ac2cf84a8a68971995d0bf2e925ec7cd960f9cb3"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "bzip2"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdb116a6ef3f6c3698828873ad02c3014b3c85cadb88496095628e3ef1e347f8"
+dependencies = [
+ "bzip2-sys",
+ "libc",
+]
+
+[[package]]
+name = "bzip2-sys"
+version = "0.1.13+1.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "225bff33b2141874fe80d71e07d6eec4f85c5c216453dd96388240f96e1acc14"
+dependencies = [
+ "cc",
+ "pkg-config",
 ]
 
 [[package]]
@@ -407,6 +448,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cipher"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
+dependencies = [
+ "crypto-common",
+ "inout",
+]
+
+[[package]]
 name = "clap"
 version = "4.5.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -453,12 +504,14 @@ dependencies = [
  "anyhow",
  "clap",
  "config",
- "tcp_cwt",
- "tcp_fmri_parcellation",
- "tcp_fmri_process",
- "tcp_fmri_segment_trials",
- "tcp_hht",
- "tcp_mvmd",
+ "cwt",
+ "data_splitting",
+ "fc",
+ "feature_extraction",
+ "fmri_parcellation",
+ "fmri_segment_trials",
+ "hilbert",
+ "mvmd",
  "tcp_subject_selection",
  "tracing",
  "tracing-subscriber",
@@ -517,6 +570,12 @@ dependencies = [
  "toml",
  "tracing",
 ]
+
+[[package]]
+name = "constant_time_eq"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "245097e9a4535ee1e3e3931fcfcd55a796a44c643e8596ff6566d68f09b87bbc"
 
 [[package]]
 name = "constant_time_eq"
@@ -663,10 +722,52 @@ dependencies = [
 ]
 
 [[package]]
+name = "cwt"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "config",
+ "fastcwt",
+ "hdf5",
+ "hdf5_io",
+ "ndarray 0.15.6",
+ "num-complex",
+ "scirs2-signal",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "data_splitting"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "config",
+ "hdf5",
+ "hdf5_io",
+ "polars",
+ "polars-io",
+ "rand 0.8.5",
+ "rand_chacha 0.3.1",
+ "tracing",
+]
+
+[[package]]
 name = "debug_unsafe"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85d3cef41d236720ed453e102153a53e4cc3d2fde848c0078a50cf249e8e3e5b"
+
+[[package]]
+name = "deranged"
+version = "0.5.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
+dependencies = [
+ "powerfmt",
+]
 
 [[package]]
 name = "digest"
@@ -676,6 +777,7 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
  "crypto-common",
+ "subtle",
 ]
 
 [[package]]
@@ -786,8 +888,25 @@ checksum = "a043dc74da1e37d6afe657061213aa6f425f855399a11d3463c6ecccc4dfda1f"
 name = "fc"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "config",
+ "hdf5",
+ "hdf5_io",
  "ndarray 0.15.6",
- "polars",
+ "tracing",
+]
+
+[[package]]
+name = "feature_extraction"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "atlas",
+ "config",
+ "hdf5",
+ "hdf5_io",
+ "tch",
+ "tracing",
 ]
 
 [[package]]
@@ -814,6 +933,42 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b09cf3155332e944990140d967ff5eceb70df778b34f77d8075db46e4704e6d8"
 dependencies = [
  "num-traits",
+]
+
+[[package]]
+name = "fmri_parcellation"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "config",
+ "git2",
+ "hdf5",
+ "ndarray 0.15.6",
+ "nifti",
+ "nifti_masker",
+ "polars",
+ "polars-io",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "fmri_segment_trials"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "config",
+ "hdf5",
+ "ndarray 0.15.6",
+ "polars",
+ "polars-io",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tracing",
 ]
 
 [[package]]
@@ -1166,6 +1321,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
+name = "hilbert"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "config",
+ "fastcwt",
+ "hdf5",
+ "hdf5_io",
+ "ndarray 0.15.6",
+ "num-complex",
+ "scirs2-signal",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest",
+]
+
+[[package]]
 name = "home"
 version = "0.5.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1427,6 +1609,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "inout"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
+dependencies = [
+ "generic-array",
+]
+
+[[package]]
 name = "instant"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1680,6 +1871,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "mvmd"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "config",
+ "hdf5",
+ "hdf5_io",
+ "ndarray 0.15.6",
+ "polars",
+ "polars-io",
+ "regex",
+ "serde",
+ "serde_json",
+ "signals",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
 name = "nalgebra"
 version = "0.33.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1839,6 +2049,12 @@ dependencies = [
  "bytemuck",
  "num-traits",
 ]
+
+[[package]]
+name = "num-conv"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6673768db2d862beb9b39a78fdcb1a69439615d5794a1be50caa9bc92c81967"
 
 [[package]]
 name = "num-derive"
@@ -2142,10 +2358,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "password-hash"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7676374caaee8a325c9e7a2ae557f216c5563a171d6997b0ef8a65af35147700"
+dependencies = [
+ "base64ct",
+ "rand_core 0.6.4",
+ "subtle",
+]
+
+[[package]]
 name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
+name = "pbkdf2"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83a0692ec44e4cf1ef28ca317f14f8f07da2d95ec3fa01f86e4467b725e60917"
+dependencies = [
+ "digest",
+ "hmac",
+ "password-hash",
+ "sha2",
+]
 
 [[package]]
 name = "percent-encoding"
@@ -2251,7 +2490,7 @@ dependencies = [
  "streaming-iterator",
  "strum_macros",
  "version_check",
- "zstd",
+ "zstd 0.13.3",
 ]
 
 [[package]]
@@ -2421,7 +2660,7 @@ dependencies = [
  "serde_json",
  "simdutf8",
  "tokio",
- "zstd",
+ "zstd 0.13.3",
 ]
 
 [[package]]
@@ -2758,6 +2997,12 @@ checksum = "b73949432f5e2a09657003c25bca5e19a0e9c84f8058ca374f49e0ebe605af77"
 dependencies = [
  "zerovec",
 ]
+
+[[package]]
+name = "powerfmt"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
 name = "ppv-lite86"
@@ -3331,6 +3576,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "safetensors"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d93279b86b3de76f820a8854dd06cbc33cfa57a417b19c47f6a25280112fb1df"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3565,6 +3820,17 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "sha1"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3bf829a2d51ab4a5ddf1352d8470c140cadc8301b2ae1789db023f01cedd6ba"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "digest",
 ]
 
 [[package]]
@@ -3841,114 +4107,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "tcp_cwt"
-version = "0.1.0"
+name = "tch"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d3f84a069d8ba16dbf720b61e8bf131d90ffb8e958a664eae8e4993c5c2fa6f"
 dependencies = [
- "anyhow",
- "config",
- "fastcwt",
- "hdf5",
- "hdf5_io",
- "ndarray 0.15.6",
- "num-complex",
- "scirs2-signal",
- "serde",
- "serde_json",
+ "half",
+ "lazy_static",
+ "libc",
+ "ndarray 0.16.1",
+ "rand 0.8.5",
+ "safetensors",
  "thiserror 1.0.69",
- "tracing",
-]
-
-[[package]]
-name = "tcp_fmri_parcellation"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "config",
- "git2",
- "hdf5",
- "ndarray 0.15.6",
- "nifti",
- "nifti_masker",
- "polars",
- "polars-io",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tracing",
-]
-
-[[package]]
-name = "tcp_fmri_process"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "config",
- "fc",
- "hdf5",
- "hdf5_io",
- "ndarray 0.15.6",
- "nifti",
- "polars",
- "polars-io",
- "serde",
- "serde_json",
- "signals",
- "thiserror 1.0.69",
- "tracing",
-]
-
-[[package]]
-name = "tcp_fmri_segment_trials"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "config",
- "hdf5",
- "ndarray 0.15.6",
- "polars",
- "polars-io",
- "regex",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tracing",
-]
-
-[[package]]
-name = "tcp_hht"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "config",
- "fastcwt",
- "hdf5",
- "hdf5_io",
- "ndarray 0.15.6",
- "num-complex",
- "scirs2-signal",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tracing",
-]
-
-[[package]]
-name = "tcp_mvmd"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "config",
- "hdf5",
- "hdf5_io",
- "ndarray 0.15.6",
- "polars",
- "polars-io",
- "regex",
- "serde",
- "serde_json",
- "signals",
- "thiserror 1.0.69",
- "tracing",
+ "torch-sys",
+ "zip",
 ]
 
 [[package]]
@@ -3973,7 +4145,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -4027,6 +4199,25 @@ checksum = "f60246a4944f24f6e018aa17cdeffb7818b76356965d03b07d6a9886e8962185"
 dependencies = [
  "cfg-if",
 ]
+
+[[package]]
+name = "time"
+version = "0.3.47"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "743bd48c283afc0388f9b8827b976905fb217ad9e647fae3a379a9283c4def2c"
+dependencies = [
+ "deranged",
+ "num-conv",
+ "powerfmt",
+ "serde_core",
+ "time-core",
+]
+
+[[package]]
+name = "time-core"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7694e1cfe791f8d31026952abf09c69ca6f6fa4e1a1229e18988f06a04a12dca"
 
 [[package]]
 name = "tinystr"
@@ -4142,6 +4333,18 @@ name = "toml_write"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
+
+[[package]]
+name = "torch-sys"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4ba78777379cf09aaa79708c63e477cf0f95e021d04360c6821f1a9f56173f7"
+dependencies = [
+ "anyhow",
+ "cc",
+ "libc",
+ "zip",
+]
 
 [[package]]
 name = "tower"
@@ -5077,6 +5280,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "zip"
+version = "0.6.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "760394e246e4c28189f19d488c058bf16f564016aefac5d32bb1f3b51d5e9261"
+dependencies = [
+ "aes",
+ "byteorder",
+ "bzip2",
+ "constant_time_eq 0.1.5",
+ "crc32fast",
+ "crossbeam-utils",
+ "flate2",
+ "hmac",
+ "pbkdf2",
+ "sha1",
+ "time",
+ "zstd 0.11.2+zstd.1.5.2",
+]
+
+[[package]]
 name = "zlib-rs"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5090,11 +5313,30 @@ checksum = "dfcd145825aace48cff44a8844de64bf75feec3080e0aa5cdbde72961ae51a65"
 
 [[package]]
 name = "zstd"
+version = "0.11.2+zstd.1.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20cc960326ece64f010d2d2107537f26dc589a6573a316bd5b1dba685fa5fde4"
+dependencies = [
+ "zstd-safe 5.0.2+zstd.1.5.2",
+]
+
+[[package]]
+name = "zstd"
 version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
 dependencies = [
- "zstd-safe",
+ "zstd-safe 7.2.4",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "5.0.2+zstd.1.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d2a5585e04f9eea4b2a3d1eca508c4dee9592a89ef6f450c11719da0726f4db"
+dependencies = [
+ "libc",
+ "zstd-sys",
 ]
 
 [[package]]
