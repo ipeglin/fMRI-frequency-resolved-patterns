@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+  "crates/atlas",
   "crates/cli",
   "crates/config",
   "crates/06fc",
@@ -13,6 +14,7 @@ members = [
   "crates/03cwt",
   "crates/04mvmd",
   "crates/05hilbert",
+  "crates/07feature_extraction",
   "crates/fmri_process",
 ]
 

@@ -18,4 +18,5 @@ cwt = { path = "../03cwt" }
 mvmd = { path = "../04mvmd" }
 fc = { path = "../06fc" }
 hilbert = { path = "../05hilbert" }
+feature_extraction = { path = "../07feature_extraction" }
 fmri_process = { path = "../fmri_process" }

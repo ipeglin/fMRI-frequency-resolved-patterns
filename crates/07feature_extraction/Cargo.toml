@@ -1,0 +1,14 @@
+[package]
+ name = "feature_extraction"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+hdf5 = { workspace = true }
+tracing = { workspace = true }
+tch = "0.24.0"
+
+atlas = { path = "../atlas" }
+config = { path = "../config" }
+hdf5_io = { path = "../hdf5_io" }
