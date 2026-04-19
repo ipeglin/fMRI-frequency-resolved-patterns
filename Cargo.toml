@@ -12,7 +12,7 @@ members = [
   "crates/02fmri_segment_trials",
   "crates/03cwt",
   "crates/04mvmd",
-  "crates/05tcp_hilbert_huang",
+  "crates/05hilbert",
   "crates/fmri_process",
 ]
 

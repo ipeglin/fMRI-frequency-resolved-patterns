@@ -1,0 +1,20 @@
+[package]
+ name = "hilbert"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+fastcwt = "0.1.9"
+scirs2-signal = "0.4.1"
+hdf5 = { workspace = true }
+ndarray = { workspace = true }
+num-complex = "0.4"
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+config = { path = "../config" }
+hdf5_io = { path = "../hdf5_io" }
