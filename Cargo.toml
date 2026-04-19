@@ -16,7 +16,7 @@ members = [
   "crates/05hilbert",
   "crates/07feature_extraction",
   "crates/08data_splitting",
-  "crates/fmri_process",
+  # "crates/fmri_process",
 ]
 
 [workspace.dependencies]

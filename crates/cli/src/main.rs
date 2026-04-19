@@ -1,8 +1,9 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use config::{
-    AppConfig, CwtConfig, HilbertHuangConfig, MvmdConfig, TcpFmriParcellationConfig, TcpFmriProcessConfig,
-    TcpSubjectSelectionConfig, TcpTrialSegmentationConfig, load_config,
+    AppConfig, CwtConfig, DataSplitConfig, FcConfig, FmriParcellationConfig, HilbertHuangConfig,
+    MvmdConfig, TcpSubjectSelectionConfig, TrialSegmentationConfig, load_config,
+    pipeline_config::FeatureExtractionConfig,
 };
 use std::path::PathBuf;
 use tracing::info;
@@ -47,9 +48,6 @@ enum Command {
         #[arg(long)]
         output_dir: Option<PathBuf>,
 
-        #[arg(long, value_delimiter = ',')]
-        filters: Option<Vec<String>>,
-
         #[arg(long)]
         dry_run: Option<bool>,
     },
@@ -68,9 +66,6 @@ enum Command {
 
         #[arg(long)]
         subcortical_atlas: Option<PathBuf>,
-
-        #[arg(long)]
-        dry_run: Option<bool>,
 
         /// Force reprocessing of subjects that already have preprocessed output
         #[arg(long, short = 'f')]
@@ -95,7 +90,6 @@ enum Command {
         /// Force reprocessing of blocks that already exist in output files
         #[arg(long, short = 'f')]
         force: bool,
-
     },
     DecomposeMvmd {
         #[arg(long)]
@@ -125,12 +119,16 @@ enum Command {
         #[arg(long, short = 'f')]
         force: bool,
     },
-    TcpFmriProcess {
+    Fc {
         #[arg(long)]
         bold_ts_dir: Option<PathBuf>,
 
+        #[arg(long, short = 'f')]
+        force: bool,
+    },
+    FeatureExtraction {
         #[arg(long)]
-        output_dir: Option<PathBuf>,
+        bold_ts_dir: Option<PathBuf>,
 
         #[arg(long)]
         cortical_lut: Option<PathBuf>,
@@ -139,12 +137,49 @@ enum Command {
         subcortical_lut: Option<PathBuf>,
 
         #[arg(long)]
-        subject_file: Option<PathBuf>,
+        cnn_weights: Option<PathBuf>,
 
-        /// Force reprocessing of subjects that already exist in output files
         #[arg(long, short = 'f')]
         force: bool,
     },
+    SplitData {
+        #[arg(long)]
+        subject_filter_dir: Option<PathBuf>,
+
+        #[arg(long)]
+        bold_ts_dir: Option<PathBuf>,
+
+        #[arg(long)]
+        training_subjects: Option<PathBuf>,
+
+        #[arg(long)]
+        test_subjects: Option<PathBuf>,
+
+        #[arg(long)]
+        validation_subjects: Option<PathBuf>,
+
+        #[arg(long, short = 'f')]
+        force: bool,
+    }, // TcpFmriProcess {
+       //     #[arg(long)]
+       //     bold_ts_dir: Option<PathBuf>,
+
+       //     #[arg(long)]
+       //     output_dir: Option<PathBuf>,
+
+       //     #[arg(long)]
+       //     cortical_lut: Option<PathBuf>,
+
+       //     #[arg(long)]
+       //     subcortical_lut: Option<PathBuf>,
+
+       //     #[arg(long)]
+       //     subject_file: Option<PathBuf>,
+
+       //     /// Force reprocessing of subjects that already exist in output files
+       //     #[arg(long, short = 'f')]
+       //     force: bool,
+       // },
 }
 
 fn init_logging(level: &str, format: LogFormat) {
@@ -186,12 +221,15 @@ fn main() -> Result<()> {
         eprintln!("Using default configuration values");
         AppConfig {
             tcp_subject_selection: TcpSubjectSelectionConfig::default(),
-            tcp_fmri_parcellation: TcpFmriParcellationConfig::default(),
-            tcp_fmri_segment_trials: TcpTrialSegmentationConfig::default(),
-            tcp_mvmd: MvmdConfig::default(),
-            tcp_cwt: CwtConfig::default(),
-            tcp_hht: HilbertHuangConfig::default(),
-            tcp_fmri_process: TcpFmriProcessConfig::default(),
+            fmri_parcellation: FmriParcellationConfig::default(),
+            fmri_segment_trials: TrialSegmentationConfig::default(),
+            mvmd: MvmdConfig::default(),
+            cwt: CwtConfig::default(),
+            hilbert: HilbertHuangConfig::default(),
+            fc: FcConfig::default(),
+            feature_extraction: FeatureExtractionConfig::default(),
+            data_splitting: DataSplitConfig::default(),
+            // fmri_process: FmriProcessConfig::default(),
         }
     });
 
@@ -207,7 +245,6 @@ fn main() -> Result<()> {
             tcp_dir,
             tcp_annex_remote,
             output_dir,
-            filters,
             dry_run,
         } => {
             let mut p = cfg.tcp_subject_selection;
@@ -222,12 +259,6 @@ fn main() -> Result<()> {
                 p.tcp_annex_remote = v
             };
 
-            if let Some(ref v) = filters
-                && !v.is_empty()
-            {
-                p.filters = filters;
-            }
-
             if let Some(v) = dry_run {
                 p.dry_run = v
             };
@@ -240,11 +271,10 @@ fn main() -> Result<()> {
             output_dir,
             cortical_atlas,
             subcortical_atlas,
-            dry_run,
             force,
             voxelwise_zscore,
         } => {
-            let mut p = cfg.tcp_fmri_parcellation;
+            let mut p = cfg.fmri_parcellation;
 
             if let Some(v) = fmri_dir {
                 p.fmri_dir = v
@@ -263,9 +293,6 @@ fn main() -> Result<()> {
                 p.subcortical_atlas = v
             };
 
-            if let Some(v) = dry_run {
-                p.dry_run = v
-            };
             if force {
                 p.force = true
             };
@@ -273,7 +300,7 @@ fn main() -> Result<()> {
                 p.voxelwise_zscore = true
             };
 
-            tcp_fmri_parcellation::run(&p)
+            fmri_parcellation::run(&p)
         }
         Command::SegmentTrials {
             tcp_dir,
@@ -281,7 +308,7 @@ fn main() -> Result<()> {
             glm_output_dir,
             force,
         } => {
-            let mut p = cfg.tcp_fmri_segment_trials;
+            let mut p = cfg.fmri_segment_trials;
 
             if let Some(v) = tcp_dir {
                 p.tcp_dir = v
@@ -299,7 +326,7 @@ fn main() -> Result<()> {
                 p.force = true
             }
 
-            tcp_fmri_segment_trials::run(&p)
+            fmri_segment_trials::run(&p)
         }
         Command::DecomposeMvmd {
             tcp_dir,
@@ -307,7 +334,7 @@ fn main() -> Result<()> {
             num_modes,
             force,
         } => {
-            let mut p = cfg.tcp_mvmd;
+            let mut p = cfg.mvmd;
 
             if let Some(v) = tcp_dir {
                 p.tcp_dir = v
@@ -325,10 +352,10 @@ fn main() -> Result<()> {
                 p.force = true
             };
 
-            tcp_mvmd::run(&p)
+            mvmd::run(&p)
         }
         Command::Cwt { bold_ts_dir, force } => {
-            let mut p = cfg.tcp_cwt;
+            let mut p = cfg.cwt;
 
             if let Some(v) = bold_ts_dir {
                 p.bold_ts_dir = v
@@ -338,10 +365,10 @@ fn main() -> Result<()> {
                 p.force = true
             }
 
-            tcp_cwt::run(&p)
+            cwt::run(&p)
         }
         Command::Hht { bold_ts_dir, force } => {
-            let mut p = cfg.tcp_hht;
+            let mut p = cfg.hilbert;
 
             if let Some(v) = bold_ts_dir {
                 p.bold_ts_dir = v
@@ -351,38 +378,117 @@ fn main() -> Result<()> {
                 p.force = true
             }
 
-            tcp_hht::run(&p)
+            hilbert::run(&p)
         }
-        Command::TcpFmriProcess {
+        Command::Fc { bold_ts_dir, force } => {
+            let mut p = cfg.fc;
+
+            if let Some(v) = bold_ts_dir {
+                p.bold_ts_dir = v
+            }
+
+            if force {
+                p.force = true
+            }
+
+            fc::run(&p)
+        }
+        Command::FeatureExtraction {
             bold_ts_dir,
-            output_dir,
             cortical_lut,
             subcortical_lut,
-            subject_file,
+            cnn_weights,
             force,
         } => {
-            let mut p = cfg.tcp_fmri_process;
+            let mut p = cfg.feature_extraction;
 
             if let Some(v) = bold_ts_dir {
                 p.bold_ts_dir = v
-            };
-            if let Some(v) = output_dir {
-                p.output_dir = v
-            };
+            }
+
             if let Some(v) = cortical_lut {
                 p.cortical_atlas_lut = v
-            };
+            }
+
             if let Some(v) = subcortical_lut {
                 p.subcortical_atlas_lut = v
-            };
-            if let Some(v) = subject_file {
-                p.subject_file = Some(v)
-            };
+            }
+
+            if let Some(v) = cnn_weights {
+                p.cnn_weights_path = Some(v)
+            }
+
             if force {
                 p.force = true
-            };
+            }
 
-            tcp_fmri_process::run(&p)
+            feature_extraction::run(&p)
         }
+        Command::SplitData {
+            subject_filter_dir,
+            bold_ts_dir,
+            training_subjects,
+            test_subjects,
+            validation_subjects,
+            force,
+        } => {
+            let mut p = cfg.data_splitting;
+
+            if let Some(v) = subject_filter_dir {
+                p.subject_filter_dir = v
+            }
+
+            if let Some(v) = bold_ts_dir {
+                p.bold_ts_dir = v
+            }
+
+            if let Some(v) = training_subjects {
+                p.training_subjects_path = v
+            }
+
+            if let Some(v) = test_subjects {
+                p.test_subjects_path = v
+            }
+
+            if let Some(v) = validation_subjects {
+                p.validation_subjects_path = v
+            }
+
+            if force {
+                p.force = true
+            }
+
+            data_splitting::run(&p)
+        } // Command::TcpFmriProcess {
+          //     bold_ts_dir,
+          //     output_dir,
+          //     cortical_lut,
+          //     subcortical_lut,
+          //     subject_file,
+          //     force,
+          // } => {
+          //     let mut p = cfg.fmri_process;
+
+          //     if let Some(v) = bold_ts_dir {
+          //         p.bold_ts_dir = v
+          //     };
+          //     if let Some(v) = output_dir {
+          //         p.output_dir = v
+          //     };
+          //     if let Some(v) = cortical_lut {
+          //         p.cortical_atlas_lut = v
+          //     };
+          //     if let Some(v) = subcortical_lut {
+          //         p.subcortical_atlas_lut = v
+          //     };
+          //     if let Some(v) = subject_file {
+          //         p.subject_file = Some(v)
+          //     };
+          //     if force {
+          //         p.force = true
+          //     };
+
+          //     fmri_process::run(&p)
+          // }
     }
 }
