@@ -8,12 +8,12 @@ members = [
   "crates/nifti_masker",
   "crates/signals",
   "crates/00tcp_subject_selection",
-  "crates/01tcp_fmri_parcellation",
-  "crates/02tcp_fmri_segment_trials",
-  "crates/03tcp_mvmd",
-  "crates/04tcp_cwt",
+  "crates/01fmri_parcellation",
+  "crates/02fmri_segment_trials",
+  "crates/03cwt",
+  "crates/04mvmd",
   "crates/05tcp_hilbert_huang",
-  "crates/tcp_fmri_process",
+  "crates/fmri_process",
 ]
 
 [workspace.dependencies]

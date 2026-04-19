@@ -1,5 +1,5 @@
 use anyhow::Result;
-use config::TcpTrialSegmentationConfig;
+use config::TrialSegmentationConfig;
 use config::bids_filename::BidsFilename;
 use config::bids_subject_id::BidsSubjectId;
 use hdf5::types::VarLenUnicode;
@@ -39,7 +39,7 @@ pub struct GlmConditions {
     pub block_level: BTreeMap<String, (Vec<f64>, Vec<f64>)>,
 }
 
-pub fn run(cfg: &TcpTrialSegmentationConfig) -> Result<()> {
+pub fn run(cfg: &TrialSegmentationConfig) -> Result<()> {
     let _run_start = Instant::now();
 
     // Disable HDF5 advisory file locking — required on macOS and some networked filesystems
@@ -472,14 +472,11 @@ pub fn events_tsv_to_blocks(events_path: &str) -> Result<DataFrame> {
         .group_by([col("block_id")])
         .agg([
             col("trial_type").first().alias("trial_type"),
-            col("cueStartTime")
-                .first()
-                .fill_null(col("onset").first())
-                .alias("onset"),
+            col("onset").first().alias("onset"),
+            col("cueStartTime").first().alias("cue_onset"),
+            col("cueEndTime").first().alias("cue_end"),
             col("fixEndTime").last().alias("block_end"),
-            (col("fixEndTime").last()
-                - col("cueStartTime").first().fill_null(col("onset").first()))
-            .alias("duration"),
+            (col("fixEndTime").last() - col("onset").first()).alias("duration"),
             col("response_time").mean().alias("response_time_mean"),
             col("response_time").median().alias("response_time_median"),
             // Correct list aggregation in Rust Polars

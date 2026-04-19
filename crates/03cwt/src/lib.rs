@@ -1,5 +1,5 @@
 use anyhow::Result;
-use config::{bids_filename::BidsFilename, bids_subject_id::BidsSubjectId, tcp_config::CwtConfig};
+use config::{bids_filename::BidsFilename, bids_subject_id::BidsSubjectId, pipeline_config::CwtConfig};
 use hdf5_io::{open_or_create, open_or_create_group, write_dataset};
 use ndarray::{Array2, Axis, concatenate};
 use std::{collections::BTreeMap, fs, path::PathBuf, time::Instant};

@@ -60,12 +60,11 @@ pub fn run(cfg: &MvmdConfig) -> Result<()> {
             .collect();
 
         for file_path in &available_timeseries {
-            let filename_without_extension = match file_path.file_stem().and_then(|n| n.to_str()) {
+            let file_result: anyhow::Result<()> = (|| {
+            let bids = BidsFilename::parse(match file_path.file_name().and_then(|n| n.to_str()) {
                 Some(name) => name,
-                None => continue,
-            };
-
-            let bids = BidsFilename::parse(filename_without_extension);
+                None => return Ok(()),
+            });
             let task_name = bids.get("task").unwrap_or("unknown");
 
             ////////////////////////
@@ -75,7 +74,7 @@ pub fn run(cfg: &MvmdConfig) -> Result<()> {
             let num_modes = cfg.num_modes;
             let admm_config = ADMMConfig::default();
 
-            let h5_file = open_or_create(&file_path)?;
+            let h5_file = open_or_create(file_path)?;
             let mvmd_group = open_or_create_group(&h5_file, "mvmd", cfg.force)?;
 
             // Whole-band decomposition on tcp_timeseries_raw
@@ -118,7 +117,7 @@ pub fn run(cfg: &MvmdConfig) -> Result<()> {
                             reason = "mvmd_init_failed",
                             "skipping MVMD due to error"
                         );
-                        continue;
+                        return Ok(());
                     }
                 };
 
@@ -195,7 +194,7 @@ pub fn run(cfg: &MvmdConfig) -> Result<()> {
                         task_name = task_name,
                         "no blocks group found, skipping block decomposition"
                     );
-                    continue;
+                    return Ok(());
                 }
             };
 
@@ -206,7 +205,7 @@ pub fn run(cfg: &MvmdConfig) -> Result<()> {
                 .collect();
 
             if block_names.is_empty() {
-                continue;
+                return Ok(());
             }
 
             let mvmd_blocks_group = open_or_create_group(&mvmd_group, "blocks", cfg.force)?;
@@ -321,6 +320,18 @@ pub fn run(cfg: &MvmdConfig) -> Result<()> {
                 num_blocks = block_names.len(),
                 "finished block MVMD decompositions"
             );
+
+            Ok(())
+            })();
+            if let Err(e) = file_result {
+                error_count += 1;
+                warn!(
+                    subject = formatted_id,
+                    file = %file_path.display(),
+                    error = %e,
+                    "skipping file due to HDF5 error"
+                );
+            }
         }
     }
 

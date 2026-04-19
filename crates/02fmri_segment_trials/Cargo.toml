@@ -1,5 +1,5 @@
 [package]
-name = "tcp_mvmd"
+name = "fmri_segment_trials"
 version = "0.1.0"
 edition = "2024"
 
@@ -16,5 +16,3 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 config = { path = "../config" }
-signals = { path = "../signals" }
-hdf5_io = { path = "../hdf5_io" }

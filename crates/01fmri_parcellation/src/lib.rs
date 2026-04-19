@@ -1,7 +1,7 @@
 use anyhow::Result;
 use config::bids_filename::{BidsFilename, find_bids_files};
 use config::bids_subject_id::BidsSubjectId;
-use config::{TcpFmriParcellationConfig, polars_csv};
+use config::{FmriParcellationConfig, polars_csv};
 use ndarray::{Array2, Axis, concatenate, s};
 use nifti_masker::{LabelsMasker, MaskerSignalConfig, Standardize, preprocess_signals};
 use polars::prelude::*;
@@ -74,9 +74,7 @@ impl MissingDatasets {
 
     /// True when any voxel-wise z-score dataset is absent (masker must be re-run with voxelwise config).
     fn needs_voxel_zscore(&self) -> bool {
-        self.cortical_voxel_zscore
-            || self.subcortical_voxel_zscore
-            || self.timeseries_voxel_zscore
+        self.cortical_voxel_zscore || self.subcortical_voxel_zscore || self.timeseries_voxel_zscore
     }
 }
 
@@ -103,7 +101,7 @@ fn check_missing_datasets(path: &Path, voxelwise_zscore: bool) -> MissingDataset
     }
 }
 
-pub fn run(cfg: &TcpFmriParcellationConfig) -> Result<()> {
+pub fn run(cfg: &FmriParcellationConfig) -> Result<()> {
     // Check that the fmri dir is even present.
     // If not, fail gracefully and inform the user that the
     // disk might not be connected, or the network disk is not opened.
@@ -128,7 +126,6 @@ pub fn run(cfg: &TcpFmriParcellationConfig) -> Result<()> {
         output_dir = %cfg.output_dir.display(),
         cortical_atlas = %cfg.cortical_atlas.display(),
         subcortical_atlas = %cfg.subcortical_atlas.display(),
-        dry_run = cfg.dry_run,
         force = cfg.force,
         voxelwise_zscore = cfg.voxelwise_zscore,
         "starting fMRI preprocessing pipeline"
@@ -386,40 +383,40 @@ pub fn run(cfg: &TcpFmriParcellationConfig) -> Result<()> {
             };
 
             // Run the masker with voxel-wise z-score normalization (applied before parcellation).
-            let (cortical_voxel_zscore, subcortical_voxel_zscore) =
-                if missing.needs_voxel_zscore() {
-                    let vz_config = MaskerSignalConfig::default().voxelwise_zscore(true);
+            let (cortical_voxel_zscore, subcortical_voxel_zscore) = if missing.needs_voxel_zscore()
+            {
+                let vz_config = MaskerSignalConfig::default().voxelwise_zscore(true);
 
-                    let cortical_start = Instant::now();
-                    let cortical_masker =
-                        LabelsMasker::with_config(&cfg.cortical_atlas, vz_config.clone())?;
-                    let c = cortical_masker.fit_transform(&file_path)?;
-                    debug!(
-                        subject_key = subject_key,
-                        atlas_type = "cortical",
-                        n_rois = c.shape()[0],
-                        n_timepoints = c.shape()[1],
-                        duration_ms = cortical_start.elapsed().as_millis(),
-                        "voxel-wise z-score parcellation completed"
-                    );
+                let cortical_start = Instant::now();
+                let cortical_masker =
+                    LabelsMasker::with_config(&cfg.cortical_atlas, vz_config.clone())?;
+                let c = cortical_masker.fit_transform(&file_path)?;
+                debug!(
+                    subject_key = subject_key,
+                    atlas_type = "cortical",
+                    n_rois = c.shape()[0],
+                    n_timepoints = c.shape()[1],
+                    duration_ms = cortical_start.elapsed().as_millis(),
+                    "voxel-wise z-score parcellation completed"
+                );
 
-                    let subcortical_start = Instant::now();
-                    let subcortical_masker =
-                        LabelsMasker::with_config(&cfg.subcortical_atlas, vz_config)?;
-                    let s = subcortical_masker.fit_transform(&file_path)?;
-                    debug!(
-                        subject_key = subject_key,
-                        atlas_type = "subcortical",
-                        n_rois = s.shape()[0],
-                        n_timepoints = s.shape()[1],
-                        duration_ms = subcortical_start.elapsed().as_millis(),
-                        "voxel-wise z-score parcellation completed"
-                    );
+                let subcortical_start = Instant::now();
+                let subcortical_masker =
+                    LabelsMasker::with_config(&cfg.subcortical_atlas, vz_config)?;
+                let s = subcortical_masker.fit_transform(&file_path)?;
+                debug!(
+                    subject_key = subject_key,
+                    atlas_type = "subcortical",
+                    n_rois = s.shape()[0],
+                    n_timepoints = s.shape()[1],
+                    duration_ms = subcortical_start.elapsed().as_millis(),
+                    "voxel-wise z-score parcellation completed"
+                );
 
-                    (Some(c), Some(s))
-                } else {
-                    (None, None)
-                };
+                (Some(c), Some(s))
+            } else {
+                (None, None)
+            };
 
             // Prepare output directory.
             if let Some(parent) = output_path.parent() {

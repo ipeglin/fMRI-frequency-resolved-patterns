@@ -2,9 +2,9 @@ mod atlas;
 mod timeseries;
 
 use anyhow::Result;
-use config::TcpFmriProcessConfig;
 use config::bids_filename::{BidsFilename, find_bids_files};
 use config::bids_subject_id::BidsSubjectId;
+use config::pipeline_config::FmriProcessConfig;
 use fc::ConnectivityMatrix;
 use ndarray::{Array2, Array3};
 use polars::prelude::*;
@@ -18,7 +18,7 @@ use tracing::{debug, info, info_span, warn};
 use atlas::{BrainAtlas, RoiType};
 use hdf5_io::{H5Attr, write_attrs, write_dataset};
 
-pub fn run(cfg: &TcpFmriProcessConfig) -> Result<()> {
+pub fn run(cfg: &FmriProcessConfig) -> Result<()> {
     let run_start = Instant::now();
 
     info!(

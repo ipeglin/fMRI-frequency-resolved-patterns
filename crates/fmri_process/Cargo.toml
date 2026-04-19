@@ -1,5 +1,5 @@
 [package]
-name = "tcp_fmri_process"
+name = "fmri_process"
 version = "0.1.0"
 edition = "2024"
 
@@ -16,6 +16,6 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 config = { path = "../config" }
-fc = { path = "../fc" }
+fc = { path = "../06fc" }
 hdf5_io = { path = "../hdf5_io" }
 signals = { path = "../signals" }
