@@ -103,9 +103,15 @@ pub fn open_or_create_group(parent: &hdf5::Group, name: &str, force: bool) -> Re
         }
         Err(_) => {}
     }
-    parent
-        .create_group(name)
-        .map_err(|e| anyhow::anyhow!("cannot create HDF5 group '{}': {}", name, e))
+    // If create_group fails because the name is still present in the symbol table
+    // (e.g. a previous run crashed after writing the link but before flushing), fall
+    // back to opening the group directly rather than propagating the error.
+    match parent.create_group(name) {
+        Ok(g) => Ok(g),
+        Err(create_err) => parent
+            .group(name)
+            .map_err(|_| anyhow::anyhow!("cannot create HDF5 group '{}': {}", name, create_err)),
+    }
 }
 
 /// Writes a typed dataset to an already-open HDF5 group.
