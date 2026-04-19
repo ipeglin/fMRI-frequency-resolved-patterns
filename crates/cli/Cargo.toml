@@ -3,6 +3,12 @@ name = "cli"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["feature-extraction"]
+# Pulls in the 07feature_extraction crate, which depends on libtorch via tch.
+# Disable with --no-default-features on hosts without libtorch installed.
+feature-extraction = ["dep:feature_extraction"]
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 
@@ -18,5 +24,5 @@ cwt = { path = "../03cwt" }
 mvmd = { path = "../04mvmd" }
 fc = { path = "../06fc" }
 hilbert = { path = "../05hilbert" }
-feature_extraction = { path = "../07feature_extraction" }
+feature_extraction = { path = "../07feature_extraction", optional = true }
 data_splitting = { path = "../08data_splitting" }

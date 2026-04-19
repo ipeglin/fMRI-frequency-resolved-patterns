@@ -126,6 +126,7 @@ enum Command {
         #[arg(long, short = 'f')]
         force: bool,
     },
+    #[cfg(feature = "feature-extraction")]
     FeatureExtraction {
         #[arg(long)]
         bold_ts_dir: Option<PathBuf>,
@@ -393,6 +394,7 @@ fn main() -> Result<()> {
 
             fc::run(&p)
         }
+        #[cfg(feature = "feature-extraction")]
         Command::FeatureExtraction {
             bold_ts_dir,
             cortical_lut,
