@@ -19,4 +19,5 @@ mvmd = { path = "../04mvmd" }
 fc = { path = "../06fc" }
 hilbert = { path = "../05hilbert" }
 feature_extraction = { path = "../07feature_extraction" }
+data_splitting = { path = "../08data_splitting" }
 fmri_process = { path = "../fmri_process" }
