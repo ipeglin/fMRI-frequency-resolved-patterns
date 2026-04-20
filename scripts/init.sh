@@ -1,12 +1,12 @@
 #!/bin/bash
 # init.sh - Main initialization script for the TCP fMRI pipeline.
 #
-# Sub-scripts executed:
+# Sub-scripts executed (or prompted):
 # - sys-idun_config.sh: Auto-fills config.toml with IDUN-specific paths.
 # - sys-all_fetch-atlas.sh: Downloads required brain atlases and updates config.toml.
 # - sys-idun_build-hdf5.sh: Compiles HDF5 from source (if missing on IDUN).
-# - sys-idun_env.sh: Loads modules (Rust, CUDA) and sets ENV vars (HDF5_DIR, LIBTORCH).
 # - sys-local_install-deps.sh: Attempts to install HDF5 via brew/apt/dnf on local setup.
+#   (Instructs to source sys-idun_env.sh afterwards)
 #
 # NOTE FOR LOCAL MACHINES: You MUST manually edit config.toml to set your specific paths after running this script.
 
