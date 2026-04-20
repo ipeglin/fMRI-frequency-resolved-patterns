@@ -6,6 +6,7 @@
 # - sys-all_fetch-atlas.sh: Downloads required brain atlases and updates config.toml.
 # - sys-idun_build-hdf5.sh: Compiles HDF5 from source (if missing on IDUN).
 # - sys-idun_env.sh: Loads modules (Rust, CUDA) and sets ENV vars (HDF5_DIR, LIBTORCH).
+# - sys-local_install-deps.sh: Attempts to install HDF5 via brew/apt/dnf on local setup.
 #
 # NOTE FOR LOCAL MACHINES: You MUST manually edit config.toml to set your specific paths after running this script.
 
@@ -53,7 +54,8 @@ if [ "$IS_IDUN" = true ]; then
     export ATLAS_DIR="/cluster/work/$USER/atlases"
 else
     DEFAULT_LOCAL_DIR="$PROJECT_ROOT/atlases"
-    read -p "Enter atlas directory [Default: $DEFAULT_LOCAL_DIR]: " USER_INPUT
+    printf "Enter atlas directory [Default: %s]: " "$DEFAULT_LOCAL_DIR"
+    read USER_INPUT
     export ATLAS_DIR="${USER_INPUT:-$DEFAULT_LOCAL_DIR}"
 fi
 echo ">> ATLAS_DIR set to: $ATLAS_DIR"
@@ -94,9 +96,15 @@ if [ "$IS_IDUN" = true ]; then
         echo ""
     fi
 else
-    # Simple local check
-    if ! command -v h5cc >/dev/null 2>&1; then
-        echo "!! Warning: HDF5 (h5cc) not found. You may need to install it manually."
+    # Local OS dependency install
+    DEPS_SCRIPT="$SCRIPTS_DIR/sys-local_install-deps.sh"
+    if [ -f "$DEPS_SCRIPT" ]; then
+        chmod +x "$DEPS_SCRIPT"
+        bash "$DEPS_SCRIPT"
+    else
+        if ! command -v h5cc >/dev/null 2>&1; then
+            echo "!! Warning: HDF5 (h5cc) not found. You may need to install it manually."
+        fi
     fi
 fi
 
