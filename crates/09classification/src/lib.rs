@@ -14,14 +14,12 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     let run_start = Instant::now();
 
     info!(
-        training_subjects_file = %cfg.training_subjects_path.display(),
-        test_subjects_file = %cfg.test_subjects_path.display(),
-        validation_subjects_file = %cfg.validation_subjects_path.display(),
+        data_splitting_output_dir = %cfg.data_splitting_output_dir.display(),
         "starting subject classification",
     );
 
     // 1. Get training subjects
-    let training_subjects_file = &cfg.training_subjects_path;
+    let training_subjects_file = &cfg.data_splitting_output_dir.join("subjects_train.csv");
     let training_subjects: Vec<String> = polars_csv::read_dataframe(&training_subjects_file)
         .with_context(|| format!("failed to read {}", training_subjects_file.display()))?
         .column("*")?
@@ -41,7 +39,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     // 2b. Optional: PCA
 
     // 3a. Initiate Classifiers
-    let knn = KNN::from_training_data()?.with_config(KnnConfig { num_neighbors: 5 }); // KNN
+    let knn_classifier = KNN::from_training_data()?.with_config(KnnConfig { num_neighbors: 5 });
 
     // 3b. Initiate SVM
 
@@ -50,12 +48,16 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     // 4b. Train SVM
 
     // 5. Get test subjects
+    let test_subjects_file = &cfg.data_splitting_output_dir.join("subjects_test.csv");
 
     // 6a. Test KNN
 
     // 6b. Test SVM
 
     // 7. Get validation subjects
+    let validation_subjects_file = &cfg
+        .data_splitting_output_dir
+        .join("subjects_validation.csv");
 
     // 8a. Validation KNN
 
