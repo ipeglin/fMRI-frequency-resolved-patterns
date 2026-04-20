@@ -16,7 +16,7 @@ fi
 mkdir -p "$WEIGHTS_DIR"
 
 # DenseNet201 Weights URL
-DENSENET_URL="https://raw.githubusercontent.com/ipeglin/masters-thesis-supplementary/main/data/processed/densenet201_imagenet.pt"
+DENSENET_URL="https://github.com/ipeglin/masters-thesis-supplementary/raw/main/data/processed/densenet201_imagenet.pt"
 DENSENET_FILE="$WEIGHTS_DIR/densenet201_imagenet.pt"
 
 log_info "CNN Weights output directory set to: $WEIGHTS_DIR"
