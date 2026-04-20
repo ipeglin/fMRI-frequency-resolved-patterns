@@ -41,26 +41,27 @@ CONFIG_FILE="$PROJECT_ROOT/config.toml"
 if [ ! -f "$CONFIG_FILE" ]; then
     log_info "Copying config.toml.example to config.toml"
     cp "$PROJECT_ROOT/config.toml.example" "$CONFIG_FILE"
-
-    if [ "$IS_IDUN" = true ]; then
-        IDUN_CFG_SCRIPT="$SCRIPTS_DIR/sys-idun_config.sh"
-        if [ -f "$IDUN_CFG_SCRIPT" ]; then
-            chmod +x "$IDUN_CFG_SCRIPT"
-            bash "$IDUN_CFG_SCRIPT" "$CONFIG_FILE"
-        fi
-    else
-        log_info "Configuring local default paths"
-        OS="$(uname -s)"
-        if [[ "$OS" == "Linux"* ]]; then
-            DL_DIR="$HOME/downloads/ds005237"
-        else
-            DL_DIR="$HOME/Downloads/ds005237"
-        fi
-        sed -i.bak -e "s|^tcp_repo_dir = .*|tcp_repo_dir = \"$DL_DIR\"|" "$CONFIG_FILE"
-        rm -f "${CONFIG_FILE}.bak"
-    fi
 else
     log_info "config.toml already exists"
+fi
+
+if [ "$IS_IDUN" = true ]; then
+    IDUN_CFG_SCRIPT="$SCRIPTS_DIR/sys-idun_config.sh"
+    if [ -f "$IDUN_CFG_SCRIPT" ]; then
+        chmod +x "$IDUN_CFG_SCRIPT"
+        bash "$IDUN_CFG_SCRIPT" "$CONFIG_FILE"
+    fi
+else
+    log_info "Configuring local default paths"
+    OS="$(uname -s)"
+    if [[ "$OS" == "Linux"* ]]; then
+        DL_DIR="$HOME/downloads/ds005237"
+    else
+        DL_DIR="$HOME/Downloads/ds005237"
+    fi
+    # Only replace if it is empty to preserve user custom paths
+    sed -i.bak -e "s|^tcp_repo_dir = \"\"|tcp_repo_dir = \"$DL_DIR\"|" "$CONFIG_FILE"
+    rm -f "${CONFIG_FILE}.bak"
 fi
 
 # --- 4. Define ATLAS_DIR ---
