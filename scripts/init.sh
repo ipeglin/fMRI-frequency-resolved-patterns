@@ -99,18 +99,11 @@ if [ "$IS_IDUN" = true ]; then
     fi
 
     ENV_SCRIPT="$SCRIPTS_DIR/sys-idun_env.sh"
-    if [ -f "$ENV_SCRIPT" ]; then
-        source "$ENV_SCRIPT"
-    fi
-    
-    if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-        echo ""
-        log_err "SCRIPT NOT SOURCED"
-        log_warn "Because you ran this with 'bash' instead of 'source', the Rust/CUDA"
-        log_warn "modules and IDUN environment variables will NOT persist in your terminal."
-        log_warn "To apply them to your current session, run: \n    source $ENV_SCRIPT"
-        echo ""
-    fi
+    echo ""
+    log_warn "IDUN ENVIRONMENT REQUIRES ACTIVATION"
+    log_info "To load Rust/CUDA modules and set HDF5 paths for this session, you MUST run:"
+    echo -e "    ${C_BOLD}${C_CYAN}source $ENV_SCRIPT${C_RESET}"
+    echo ""
 else
     # Local OS dependency install
     DEPS_SCRIPT="$SCRIPTS_DIR/sys-local_install-deps.sh"
