@@ -16,7 +16,7 @@ for key in "${KEYS[@]}"; do
     case "$key" in
         "cortical_atlas") URL="https://raw.githubusercontent.com/ThomasYeoLab/CBIG/master/stable_projects/brain_parcellation/Yan2023_homotopic/parcellations/MNI/yeo17/400Parcels_Yeo2011_17Networks_FSLMNI152_2mm.nii.gz" ;;
         "cortical_atlas_lut") URL="https://raw.githubusercontent.com/ThomasYeoLab/CBIG/master/stable_projects/brain_parcellation/Yan2023_homotopic/parcellations/HCP/fsLR32k/yeo17/400Parcels_Yeo2011_17Networks_info.txt" ;;
-        "subcortical_atlas") URL="https://raw.githubusercontent.com/yetianmed/subcortex/master/Group-Parcellation/3T/Subcortex-Only/Tian_Subcortex_S3_3T.nii" ;;
+        "subcortical_atlas") URL="https://raw.githubusercontent.com/yetianmed/subcortex/master/Group-Parcellation/3T/Subcortex-Only/Tian_Subcortex_S2_3T.nii" ;;
         "subcortical_atlas_lut") URL="https://raw.githubusercontent.com/yetianmed/subcortex/master/Group-Parcellation/3T/Subcortex-Only/Tian_Subcortex_S2_3T_label.txt" ;;
     esac
 
