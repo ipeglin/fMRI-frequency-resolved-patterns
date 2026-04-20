@@ -9,11 +9,7 @@ fmriprep_output_dir = ""
 parcellated_ts_dir = ""
 subject_filter_dir = ""
 task_regressors_output_dir = ""
-
-# Files
-training_subjects_path = ""
-test_subjects_path = ""
-validation_subjects_path = ""
+data_splitting_output_dir = ""
 
 # Atlas Files
 cortical_atlas = ""

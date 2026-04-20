@@ -8,6 +8,7 @@ use std::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     // Shared IO paths (used by multiple stages)
+    pub tcp_annex_remote: String,
     pub tcp_repo_dir: PathBuf,
     pub fmriprep_output_dir: PathBuf,
     pub parcellated_ts_dir: PathBuf,
@@ -17,10 +18,7 @@ pub struct AppConfig {
     pub subcortical_atlas: PathBuf,
     pub cortical_atlas_lut: PathBuf,
     pub subcortical_atlas_lut: PathBuf,
-    pub training_subjects_path: PathBuf,
-    pub test_subjects_path: PathBuf,
-    pub validation_subjects_path: PathBuf,
-    pub tcp_annex_remote: String,
+    pub data_splitting_output_dir: PathBuf,
 
     // Global behavior flags
     #[serde(default)]
@@ -49,9 +47,7 @@ impl Default for AppConfig {
             subcortical_atlas: PathBuf::from("/path/to/subcortical_atlas"),
             cortical_atlas_lut: PathBuf::from("/path/to/cortical_atlas_lut"),
             subcortical_atlas_lut: PathBuf::from("/path/to/subcortical_atlas_lut"),
-            training_subjects_path: PathBuf::from("/path/to/training_subjects.csv"),
-            test_subjects_path: PathBuf::from("/path/to/test_subjects.csv"),
-            validation_subjects_path: PathBuf::from("/path/to/validation_subjects.csv"),
+            data_splitting_output_dir: PathBuf::from("/path/to/data_split"),
             tcp_annex_remote: String::new(),
             force: false,
             dry_run: false,
@@ -66,14 +62,26 @@ impl fmt::Display for AppConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "AppConfig:")?;
         writeln!(f, "  tcp_repo_dir: {}", self.tcp_repo_dir.display())?;
-        writeln!(f, "  fmriprep_output_dir: {}", self.fmriprep_output_dir.display())?;
-        writeln!(f, "  parcellated_ts_dir: {}", self.parcellated_ts_dir.display())?;
+        writeln!(
+            f,
+            "  fmriprep_output_dir: {}",
+            self.fmriprep_output_dir.display()
+        )?;
+        writeln!(
+            f,
+            "  parcellated_ts_dir: {}",
+            self.parcellated_ts_dir.display()
+        )?;
         writeln!(
             f,
             "  subject_filter_dir: {}",
             self.subject_filter_dir.display()
         )?;
-        writeln!(f, "  task_regressors_output_dir: {}", self.task_regressors_output_dir.display())?;
+        writeln!(
+            f,
+            "  task_regressors_output_dir: {}",
+            self.task_regressors_output_dir.display()
+        )?;
         writeln!(f, "  cortical_atlas: {}", self.cortical_atlas.display())?;
         writeln!(
             f,
@@ -92,18 +100,8 @@ impl fmt::Display for AppConfig {
         )?;
         writeln!(
             f,
-            "  training_subjects_path: {}",
-            self.training_subjects_path.display()
-        )?;
-        writeln!(
-            f,
-            "  test_subjects_path: {}",
-            self.test_subjects_path.display()
-        )?;
-        writeln!(
-            f,
-            "  validation_subjects_path: {}",
-            self.validation_subjects_path.display()
+            "  data_splitting_output_dir: {}",
+            self.data_splitting_output_dir.display()
         )?;
         writeln!(f, "  force: {}", self.force)?;
         writeln!(f, "  dry_run: {}", self.dry_run)?;
@@ -185,9 +183,7 @@ mod tests {
             subcortical_atlas = "/sca"
             cortical_atlas_lut = "/cal"
             subcortical_atlas_lut = "/scal"
-            training_subjects_path = "/tr"
-            test_subjects_path = "/te"
-            validation_subjects_path = "/va"
+            data_splitting_output_dir = "/ds"
             tcp_annex_remote = "uuid"
         "#;
         let cfg: AppConfig = toml::from_str(toml).unwrap();
@@ -209,9 +205,7 @@ mod tests {
             subcortical_atlas = "/sca"
             cortical_atlas_lut = "/cal"
             subcortical_atlas_lut = "/scal"
-            training_subjects_path = "/tr"
-            test_subjects_path = "/te"
-            validation_subjects_path = "/va"
+            data_splitting_output_dir = "/ds"
             tcp_annex_remote = "uuid"
 
             [mvmd]
