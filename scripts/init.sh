@@ -5,6 +5,7 @@
 # - sys-idun_config.sh: Auto-fills config.toml with IDUN-specific paths.
 # - sys-local_config.sh: Auto-fills config.toml with Local-specific paths (e.g. Downloads dir).
 # - sys-all_fetch-atlas.sh: Downloads required brain atlases and updates config.toml.
+# - sys-all_fetch-weights.sh: Downloads pre-trained CNN weights into IDUN/Local paths.
 # - sys-idun_build-hdf5.sh: Compiles HDF5 from source (if missing on IDUN).
 # - sys-local_install-deps.sh: Attempts to install HDF5 via brew/apt/dnf on local setup.
 #   (Instructs to source sys-idun_env.sh afterwards)
@@ -58,6 +59,16 @@ else
             chmod +x "$LOCAL_CFG_SCRIPT"
             bash "$LOCAL_CFG_SCRIPT" "$CONFIG_FILE"
         fi
+    fi
+else
+    log_info "config.toml already exists"
+fi
+
+# --- 4. Define ATLAS_DIR ---
+log_step "Configuring Atlas Directory"
+if [ "$IS_IDUN" = true ]; then
+    export ATLAS_DIR="/cluster/work/$USER/atlases"
+else
     DEFAULT_LOCAL_DIR="$PROJECT_ROOT/atlases"
     printf "  ${C_CYAN}ℹ${C_RESET} Enter atlas directory [Default: %s]: " "$DEFAULT_LOCAL_DIR"
     read USER_INPUT
@@ -76,7 +87,28 @@ else
     log_err "$FETCH_SCRIPT not found."
 fi
 
-# --- 6. HDF5 & Environment Setup ---
+# --- 6. Run CNN Weights Fetcher ---
+log_step "Fetching CNN Weights"
+if [ "$IS_IDUN" = true ]; then
+    WEIGHTS_DIR="/cluster/work/$USER/cnn_weights"
+else
+    OS="$(uname -s)"
+    if [[ "$OS" == "Linux"* ]]; then
+        WEIGHTS_DIR="$HOME/downloads/cnn_weights"
+    else
+        WEIGHTS_DIR="$HOME/Downloads/cnn_weights"
+    fi
+fi
+
+FETCH_WEIGHTS="$SCRIPTS_DIR/sys-all_fetch-weights.sh"
+if [ -f "$FETCH_WEIGHTS" ]; then
+    chmod +x "$FETCH_WEIGHTS"
+    bash "$FETCH_WEIGHTS" "$PROJECT_ROOT" "$WEIGHTS_DIR"
+else
+    log_err "$FETCH_WEIGHTS not found."
+fi
+
+# --- 7. HDF5 & Environment Setup ---
 log_step "Setting up Environment"
 if [ "$IS_IDUN" = true ]; then
     HDF5_INSTALL_DIR="$HOME/hdf5"
