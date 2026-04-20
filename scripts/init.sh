@@ -3,6 +3,7 @@
 #
 # Sub-scripts executed (or prompted):
 # - sys-idun_config.sh: Auto-fills config.toml with IDUN-specific paths.
+# - sys-local_config.sh: Auto-fills config.toml with Local-specific paths (e.g. Downloads dir).
 # - sys-all_fetch-atlas.sh: Downloads required brain atlases and updates config.toml.
 # - sys-idun_build-hdf5.sh: Compiles HDF5 from source (if missing on IDUN).
 # - sys-local_install-deps.sh: Attempts to install HDF5 via brew/apt/dnf on local setup.
@@ -52,23 +53,11 @@ if [ "$IS_IDUN" = true ]; then
         bash "$IDUN_CFG_SCRIPT" "$CONFIG_FILE"
     fi
 else
-    log_info "Configuring local default paths"
-    OS="$(uname -s)"
-    if [[ "$OS" == "Linux"* ]]; then
-        DL_DIR="$HOME/downloads/ds005237"
-    else
-        DL_DIR="$HOME/Downloads/ds005237"
-    fi
-    # Only replace if it is empty to preserve user custom paths
-    sed -i.bak -e "s|^tcp_repo_dir = \"\"|tcp_repo_dir = \"$DL_DIR\"|" "$CONFIG_FILE"
-    rm -f "${CONFIG_FILE}.bak"
-fi
-
-# --- 4. Define ATLAS_DIR ---
-log_step "Configuring Atlas Directory"
-if [ "$IS_IDUN" = true ]; then
-    export ATLAS_DIR="/cluster/work/$USER/atlases"
-else
+        LOCAL_CFG_SCRIPT="$SCRIPTS_DIR/sys-local_config.sh"
+        if [ -f "$LOCAL_CFG_SCRIPT" ]; then
+            chmod +x "$LOCAL_CFG_SCRIPT"
+            bash "$LOCAL_CFG_SCRIPT" "$CONFIG_FILE"
+        fi
     DEFAULT_LOCAL_DIR="$PROJECT_ROOT/atlases"
     printf "  ${C_CYAN}ℹ${C_RESET} Enter atlas directory [Default: %s]: " "$DEFAULT_LOCAL_DIR"
     read USER_INPUT
