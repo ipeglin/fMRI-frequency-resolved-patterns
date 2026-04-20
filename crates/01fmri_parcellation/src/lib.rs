@@ -1,9 +1,12 @@
+mod nifti_masker;
+
 use anyhow::Result;
-use config::bids_filename::{BidsFilename, find_bids_files};
-use config::bids_subject_id::BidsSubjectId;
-use config::{FmriParcellationConfig, polars_csv};
 use ndarray::{Array2, Axis, concatenate, s};
 use nifti_masker::{LabelsMasker, MaskerSignalConfig, Standardize, preprocess_signals};
+use utils::bids_filename::{BidsFilename, find_bids_files};
+use utils::bids_subject_id::BidsSubjectId;
+use utils::config::AppConfig;
+use utils::polars_csv;
 use polars::prelude::*;
 use std::fs;
 use std::io::ErrorKind;
@@ -101,17 +104,17 @@ fn check_missing_datasets(path: &Path, voxelwise_zscore: bool) -> MissingDataset
     }
 }
 
-pub fn run(cfg: &FmriParcellationConfig) -> Result<()> {
+pub fn run(cfg: &AppConfig) -> Result<()> {
     // Check that the fmri dir is even present.
     // If not, fail gracefully and inform the user that the
     // disk might not be connected, or the network disk is not opened.
-    let fmri_dir = &cfg.fmri_dir;
-    match fs::read_dir(fmri_dir) {
+    let fmriprep_output_dir = &cfg.fmriprep_output_dir;
+    match fs::read_dir(fmriprep_output_dir) {
         Ok(_) => { /* Process entries */ }
         Err(e) if e.kind() == ErrorKind::NotFound => {
             error!(
-                fmri_dir = %fmri_dir.display(),
-                "Directory not found: {}. Make sure to have the disk connected, or connecting to the network drive", fmri_dir.display()
+                fmriprep_output_dir = %fmriprep_output_dir.display(),
+                "Directory not found: {}. Make sure to have the disk connected, or connecting to the network drive", fmriprep_output_dir.display()
             );
             return Ok(());
         }
@@ -121,18 +124,18 @@ pub fn run(cfg: &FmriParcellationConfig) -> Result<()> {
     let run_start = Instant::now();
 
     info!(
-        fmri_dir = %cfg.fmri_dir.display(),
-        filter_dir = %cfg.filter_dir.display(),
-        output_dir = %cfg.output_dir.display(),
+        fmriprep_output_dir = %cfg.fmriprep_output_dir.display(),
+        filter_dir = %cfg.subject_filter_dir.display(),
+        output_dir = %cfg.parcellated_ts_dir.display(),
         cortical_atlas = %cfg.cortical_atlas.display(),
         subcortical_atlas = %cfg.subcortical_atlas.display(),
         force = cfg.force,
-        voxelwise_zscore = cfg.voxelwise_zscore,
+        voxelwise_zscore = cfg.parcellation.voxelwise_zscore,
         "starting fMRI preprocessing pipeline"
     );
 
     // Load subject filter files
-    let filter_dir = &cfg.filter_dir;
+    let filter_dir = &cfg.subject_filter_dir;
     let filtered_subjects = [
         filter_dir.join("healthy_controls.csv"),
         filter_dir.join("anhedonic.csv"),
@@ -171,7 +174,7 @@ pub fn run(cfg: &FmriParcellationConfig) -> Result<()> {
         panic!("failed to locate atlases");
     }
 
-    std::fs::create_dir_all(&cfg.output_dir)?;
+    std::fs::create_dir_all(&cfg.parcellated_ts_dir)?;
 
     // Processing state
     let mut processed_count = 0usize;
@@ -181,7 +184,7 @@ pub fn run(cfg: &FmriParcellationConfig) -> Result<()> {
     for (i, subject_key) in subject_keys.into_iter().flatten().enumerate() {
         let subject_idx = i + 1;
         let dir_name = BidsSubjectId::parse(subject_key).to_dir_name();
-        let subject_dir = fmri_dir.join(&dir_name);
+        let subject_dir = fmriprep_output_dir.join(&dir_name);
 
         // Create a span for the entire subject processing - this is the "wide event"
         let _subject_span = info_span!(
@@ -255,7 +258,7 @@ pub fn run(cfg: &FmriParcellationConfig) -> Result<()> {
             let output_stem = bids_filename.to_stem();
 
             let output_path = cfg
-                .output_dir
+                .parcellated_ts_dir
                 .join(BidsSubjectId::parse(subject_key).to_dir_name())
                 .join(format!("{}.h5", output_stem));
 
@@ -264,9 +267,9 @@ pub fn run(cfg: &FmriParcellationConfig) -> Result<()> {
             //   no file  → all missing (fresh create)
             //   file exists, no force → inspect per-dataset; only fill gaps
             let missing = if cfg.force || !output_path.exists() {
-                MissingDatasets::all(cfg.voxelwise_zscore)
+                MissingDatasets::all(cfg.parcellation.voxelwise_zscore)
             } else {
-                check_missing_datasets(&output_path, cfg.voxelwise_zscore)
+                check_missing_datasets(&output_path, cfg.parcellation.voxelwise_zscore)
             };
 
             if missing.all_present() {
@@ -475,7 +478,7 @@ pub fn run(cfg: &FmriParcellationConfig) -> Result<()> {
         skipped_count = skipped_count,
         error_count = error_count,
         total_duration_ms = run_duration_ms,
-        output_dir = %cfg.output_dir.display(),
+        output_dir = %cfg.parcellated_ts_dir.display(),
         outcome = if error_count == 0 { "success" } else { "completed_with_errors" },
         "fMRI preprocessing pipeline completed"
     );

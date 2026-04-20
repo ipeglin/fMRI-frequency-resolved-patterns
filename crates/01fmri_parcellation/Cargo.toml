@@ -16,6 +16,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+nalgebra = "0.33"
 
-config = { path = "../config" }
-nifti_masker = { path = "../nifti_masker" }
+utils = { path = "../utils" }
