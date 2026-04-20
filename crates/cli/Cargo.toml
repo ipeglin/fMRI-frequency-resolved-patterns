@@ -15,8 +15,13 @@ clap = { version = "4", features = ["derive"] }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+toml = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+polars = { workspace = true }
 
-config = { path = "../config" }
+utils = { path = "../utils" }
 tcp_subject_selection = { path = "../00tcp_subject_selection" }
 fmri_parcellation = { path = "../01fmri_parcellation" }
 fmri_segment_trials = { path = "../02fmri_segment_trials" }
@@ -26,3 +31,4 @@ fc = { path = "../06fc" }
 hilbert = { path = "../05hilbert" }
 feature_extraction = { path = "../07feature_extraction", optional = true }
 data_splitting = { path = "../08data_splitting" }
+classification = { path = "../09classification" }
