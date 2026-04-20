@@ -30,8 +30,8 @@ case "$OS" in
         ;;
     Darwin*)
         if command -v brew >/dev/null 2>&1; then
-            echo "Detected macOS. Installing hdf5 via brew..."
-            brew install hdf5
+            echo "Detected macOS. Installing hdf5@1.10 via brew..."
+            brew install hdf5@1.10
         else
             echo "!! Homebrew not found. Install Homebrew or install HDF5 manually."
         fi
