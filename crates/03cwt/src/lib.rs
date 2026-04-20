@@ -4,6 +4,7 @@ use utils::bids_subject_id::BidsSubjectId;
 use utils::config::AppConfig;
 use utils::hdf5_io::{open_or_create, open_or_create_group, write_dataset};
 use ndarray::{Array2, Axis, concatenate};
+use rayon::prelude::*;
 use std::{collections::BTreeMap, fs, path::PathBuf, time::Instant};
 use tracing::{debug, info, warn};
 
@@ -43,35 +44,46 @@ fn cwt_scalogram(signal: &Array2<f64>) -> (Vec<f64>, [usize; 3]) {
         })
         .collect();
 
+    // Parallelize over channels: each channel's scalogram is independent. Contiguous
+    // copy avoids requiring row-major views to be Sync across threads.
+    let channels_rows: Vec<Vec<f64>> = (0..n_channels)
+        .map(|ch| signal.row(ch).to_vec())
+        .collect();
+
+    let per_channel: Vec<Vec<f64>> = channels_rows
+        .par_iter()
+        .enumerate()
+        .map(|(ch, channel_slice)| {
+            if ch % 50 == 0 {
+                debug!(
+                    channel = ch,
+                    n_channels = n_channels,
+                    n_timepoints = n_timepoints,
+                    n_scales = n_scales,
+                    "computing scalogram for channel"
+                );
+            }
+
+            // symmetry=0.0 → standard symmetric Morlet (non-zero cancels the Gaussian envelope)
+            let scalo = scalogram(
+                channel_slice,
+                |points, scale| complex_morlet(points, 6.0, 1.0, 0.0, scale),
+                &scales,
+                Some(false),
+            )
+            .expect("scalogram computation should succeed");
+
+            let mut out: Vec<f64> = Vec::with_capacity(n_scales * n_timepoints);
+            for scale_row in &scalo {
+                out.extend_from_slice(scale_row);
+            }
+            out
+        })
+        .collect();
+
     let mut flat: Vec<f64> = Vec::with_capacity(n_channels * n_scales * n_timepoints);
-
-    for ch in 0..n_channels {
-        if ch % 50 == 0 {
-            debug!(
-                channel = ch,
-                n_channels = n_channels,
-                n_timepoints = n_timepoints,
-                n_scales = n_scales,
-                "computing scalogram for channel"
-            );
-        }
-
-        let channel = signal.row(ch);
-        let channel_slice = channel.as_slice().expect("channel row is not contiguous");
-
-        // symmetry=0.0 → standard symmetric Morlet (non-zero cancels the Gaussian envelope)
-        let scalo = scalogram(
-            channel_slice,
-            |points, scale| complex_morlet(points, 6.0, 1.0, 0.0, scale),
-            &scales,
-            Some(false),
-        )
-        .expect("scalogram computation should succeed");
-
-        // scalo is [n_scales][n_timepoints]; flatten row-major into the output buffer
-        for scale_row in &scalo {
-            flat.extend_from_slice(scale_row);
-        }
+    for ch_buf in per_channel {
+        flat.extend(ch_buf);
     }
 
     (flat, [n_channels, n_scales, n_timepoints])
