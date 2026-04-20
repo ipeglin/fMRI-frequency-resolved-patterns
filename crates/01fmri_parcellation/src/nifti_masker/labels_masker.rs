@@ -1,7 +1,9 @@
 use anyhow::{Result, bail};
 use nalgebra::Matrix4;
-use ndarray::{Array2, Array3, Array4, ShapeBuilder};
+use ndarray::parallel::prelude::*;
+use ndarray::{Array2, Array3, Array4, Axis, ShapeBuilder};
 use nifti::{IntoNdArray, NiftiHeader, NiftiObject, NiftiVolume, ReaderOptions};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{collections::HashSet, path::PathBuf};
 use tracing::{debug, trace};
 
@@ -149,46 +151,58 @@ impl LabelsMasker {
 
         let resampled_labels = self.resample_to_target(&bold_data, &bold_affine)?;
 
-        // Extract time series for each label
+        // Extract time series for each label in parallel. Each ROI's mask build
+        // + per-timepoint mean is independent; rayon scales it across cores.
         let n_labels = self.unique_labels.len();
         let mut result = Array2::<f32>::zeros((n_labels, n_timepoints));
-        let mut empty_rois = 0usize;
+        let empty_rois_atomic = AtomicUsize::new(0);
 
-        for (label_idx, &label) in self.unique_labels.iter().enumerate() {
-            let mask: Vec<(usize, usize, usize)> = resampled_labels
-                .indexed_iter()
-                .filter_map(|((x, y, z), &val)| {
-                    if val.round() as i32 == label {
-                        Some((x, y, z))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+        let per_label: Vec<(usize, Vec<f32>)> = self
+            .unique_labels
+            .par_iter()
+            .enumerate()
+            .map(|(label_idx, &label)| {
+                let mask: Vec<(usize, usize, usize)> = resampled_labels
+                    .indexed_iter()
+                    .filter_map(|((x, y, z), &val)| {
+                        if val.round() as i32 == label {
+                            Some((x, y, z))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
 
-            if mask.is_empty() {
-                empty_rois += 1;
-                trace!(
-                    label = label,
-                    label_idx = label_idx,
-                    "ROI has no voxels after resampling"
-                );
+                if mask.is_empty() {
+                    empty_rois_atomic.fetch_add(1, Ordering::Relaxed);
+                    trace!(
+                        label = label,
+                        label_idx = label_idx,
+                        "ROI has no voxels after resampling"
+                    );
+                    return (label_idx, Vec::new());
+                }
+
+                let n_vox = mask.len();
+                let mut ts = vec![0f32; n_timepoints];
+                for t in 0..n_timepoints {
+                    let sum: f32 = mask.iter().map(|&(x, y, z)| bold_data[[x, y, z, t]]).sum();
+                    ts[t] = sum / n_vox as f32;
+                }
+                (label_idx, ts)
+            })
+            .collect();
+
+        for (label_idx, ts) in per_label {
+            if ts.is_empty() {
                 continue;
             }
-
-            trace!(
-                label = label,
-                label_idx = label_idx,
-                n_voxels = mask.len(),
-                "extracting timeseries for ROI"
-            );
-
-            // Compute mean time series across all voxels in this ROI
-            for t in 0..n_timepoints {
-                let sum: f32 = mask.iter().map(|&(x, y, z)| bold_data[[x, y, z, t]]).sum();
-                result[[label_idx, t]] = sum / mask.len() as f32;
+            for (t, v) in ts.into_iter().enumerate() {
+                result[[label_idx, t]] = v;
             }
         }
+
+        let empty_rois = empty_rois_atomic.load(Ordering::Relaxed);
 
         debug!(
             n_labels = n_labels,
@@ -246,38 +260,47 @@ impl LabelsMasker {
         let transform = labels_affine_inv * bold_affine;
 
         let mut resampled = Array3::<f32>::zeros(target_shape);
-        let src_shape = self.labels_volume.shape();
+        let src_shape = self.labels_volume.shape().to_vec();
+        let src0 = src_shape[0] as i64;
+        let src1 = src_shape[1] as i64;
+        let src2 = src_shape[2] as i64;
 
-        let mut in_bounds_count = 0usize;
-        let mut out_of_bounds_count = 0usize;
+        let in_bounds_atomic = AtomicUsize::new(0);
+        let out_of_bounds_atomic = AtomicUsize::new(0);
 
-        for x in 0..target_shape.0 {
-            for y in 0..target_shape.1 {
-                for z in 0..target_shape.2 {
-                    let bold_voxel = nalgebra::Vector4::new(x as f64, y as f64, z as f64, 1.0);
-                    let atlas_voxel = transform * bold_voxel;
+        // Parallelize over outer x-axis: each plane writes to a disjoint
+        // Array3 slab so there is no aliasing between threads.
+        resampled
+            .axis_iter_mut(Axis(0))
+            .into_par_iter()
+            .enumerate()
+            .for_each(|(x, mut plane)| {
+                let mut local_in = 0usize;
+                let mut local_oob = 0usize;
+                for y in 0..target_shape.1 {
+                    for z in 0..target_shape.2 {
+                        let bold_voxel = nalgebra::Vector4::new(x as f64, y as f64, z as f64, 1.0);
+                        let atlas_voxel = transform * bold_voxel;
 
-                    let sx = atlas_voxel[0].round() as i64;
-                    let sy = atlas_voxel[1].round() as i64;
-                    let sz = atlas_voxel[2].round() as i64;
+                        let sx = atlas_voxel[0].round() as i64;
+                        let sy = atlas_voxel[1].round() as i64;
+                        let sz = atlas_voxel[2].round() as i64;
 
-                    if sx >= 0
-                        && sx < src_shape[0] as i64
-                        && sy >= 0
-                        && sy < src_shape[1] as i64
-                        && sz >= 0
-                        && sz < src_shape[2] as i64
-                    {
-                        resampled[[x, y, z]] =
-                            self.labels_volume[[sx as usize, sy as usize, sz as usize]];
-                        in_bounds_count += 1;
-                    } else {
-                        out_of_bounds_count += 1;
+                        if sx >= 0 && sx < src0 && sy >= 0 && sy < src1 && sz >= 0 && sz < src2 {
+                            plane[[y, z]] =
+                                self.labels_volume[[sx as usize, sy as usize, sz as usize]];
+                            local_in += 1;
+                        } else {
+                            local_oob += 1;
+                        }
                     }
                 }
-            }
-        }
+                in_bounds_atomic.fetch_add(local_in, Ordering::Relaxed);
+                out_of_bounds_atomic.fetch_add(local_oob, Ordering::Relaxed);
+            });
 
+        let in_bounds_count = in_bounds_atomic.load(Ordering::Relaxed);
+        let out_of_bounds_count = out_of_bounds_atomic.load(Ordering::Relaxed);
         let total_voxels = target_shape.0 * target_shape.1 * target_shape.2;
         let coverage_pct = (in_bounds_count as f64 / total_voxels as f64) * 100.0;
 

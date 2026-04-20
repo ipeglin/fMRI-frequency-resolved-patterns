@@ -1,6 +1,7 @@
 use anyhow::{bail, Result};
 use nalgebra::Matrix4;
-use ndarray::{Array2, Array3, Array4, ShapeBuilder};
+use ndarray::parallel::prelude::*;
+use ndarray::{Array2, Array3, Array4, Axis, ShapeBuilder};
 use nifti::{IntoNdArray, NiftiHeader, NiftiObject, NiftiVolume, ReaderOptions};
 use std::{collections::HashSet, path::PathBuf};
 use tracing::{debug, trace};
@@ -228,35 +229,39 @@ fn standardize_signal(
 /// zero variance (e.g. outside the brain mask) are left unchanged.
 pub(super) fn voxelwise_zscore_bold(data: &mut Array4<f32>) {
     let shape = data.shape().to_vec();
-    let (nx, ny, nz, nt) = (shape[0], shape[1], shape[2], shape[3]);
+    let (_nx, ny, nz, nt) = (shape[0], shape[1], shape[2], shape[3]);
 
     if nt <= 1 {
         return;
     }
 
-    for x in 0..nx {
-        for y in 0..ny {
-            for z in 0..nz {
-                let mean: f32 = (0..nt).map(|t| data[[x, y, z, t]]).sum::<f32>() / nt as f32;
-                let variance: f32 = (0..nt)
-                    .map(|t| {
-                        let d = data[[x, y, z, t]] - mean;
-                        d * d
-                    })
-                    .sum::<f32>()
-                    / (nt - 1) as f32;
-                let std = variance.sqrt();
+    // Parallelize over x: disjoint slabs along axis 0, each thread owns its plane.
+    data.axis_iter_mut(Axis(0))
+        .into_par_iter()
+        .for_each(|mut plane| {
+            for y in 0..ny {
+                for z in 0..nz {
+                    let mean: f32 =
+                        (0..nt).map(|t| plane[[y, z, t]]).sum::<f32>() / nt as f32;
+                    let variance: f32 = (0..nt)
+                        .map(|t| {
+                            let d = plane[[y, z, t]] - mean;
+                            d * d
+                        })
+                        .sum::<f32>()
+                        / (nt - 1) as f32;
+                    let std = variance.sqrt();
 
-                if std < f32::EPSILON {
-                    continue;
-                }
+                    if std < f32::EPSILON {
+                        continue;
+                    }
 
-                for t in 0..nt {
-                    data[[x, y, z, t]] = (data[[x, y, z, t]] - mean) / std;
+                    for t in 0..nt {
+                        plane[[y, z, t]] = (plane[[y, z, t]] - mean) / std;
+                    }
                 }
             }
-        }
-    }
+        });
 }
 
 /// Apply preprocessing (detrend and/or standardize) to extracted time series.
