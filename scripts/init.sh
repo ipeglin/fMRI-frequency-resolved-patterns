@@ -54,14 +54,11 @@ if [ "$IS_IDUN" = true ]; then
         bash "$IDUN_CFG_SCRIPT" "$CONFIG_FILE"
     fi
 else
-        LOCAL_CFG_SCRIPT="$SCRIPTS_DIR/sys-local_config.sh"
-        if [ -f "$LOCAL_CFG_SCRIPT" ]; then
-            chmod +x "$LOCAL_CFG_SCRIPT"
-            bash "$LOCAL_CFG_SCRIPT" "$CONFIG_FILE"
-        fi
+    LOCAL_CFG_SCRIPT="$SCRIPTS_DIR/sys-local_config.sh"
+    if [ -f "$LOCAL_CFG_SCRIPT" ]; then
+        chmod +x "$LOCAL_CFG_SCRIPT"
+        bash "$LOCAL_CFG_SCRIPT" "$CONFIG_FILE"
     fi
-else
-    log_info "config.toml already exists"
 fi
 
 # --- 4. Define ATLAS_DIR ---
