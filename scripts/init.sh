@@ -44,6 +44,16 @@ if [ ! -f "$CONFIG_FILE" ]; then
             chmod +x "$IDUN_CFG_SCRIPT"
             bash "$IDUN_CFG_SCRIPT" "$CONFIG_FILE"
         fi
+    else
+        echo ">> Configuring local default paths..."
+        OS="$(uname -s)"
+        if [[ "$OS" == "Linux"* ]]; then
+            DL_DIR="$HOME/downloads/ds005237"
+        else
+            DL_DIR="$HOME/Downloads/ds005237"
+        fi
+        sed -i.bak -e "s|^tcp_repo_dir = .*|tcp_repo_dir = \"$DL_DIR\"|" "$CONFIG_FILE"
+        rm -f "${CONFIG_FILE}.bak"
     fi
 else
     echo ">> config.toml already exists."
