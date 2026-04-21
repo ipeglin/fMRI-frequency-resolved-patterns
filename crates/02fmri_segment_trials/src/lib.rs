@@ -1,7 +1,4 @@
 use anyhow::Result;
-use utils::bids_filename::BidsFilename;
-use utils::bids_subject_id::BidsSubjectId;
-use utils::config::AppConfig;
 use hdf5::types::VarLenUnicode;
 use ndarray::{Array2, s};
 use polars::prelude::*;
@@ -13,6 +10,9 @@ use std::{
     time::Instant,
 };
 use tracing::{info, warn};
+use utils::bids_filename::BidsFilename;
+use utils::bids_subject_id::BidsSubjectId;
+use utils::config::AppConfig;
 
 const TR_SECONDS: f64 = 0.8;
 
@@ -68,9 +68,20 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         })
         .collect();
 
-    info!(num_subjects = subjects.len(), "found subject directories");
+    let total_subjects = subjects.len();
+    info!(num_subjects = total_subjects, "found subject directories");
+
+    let mut subject_idx = 0;
 
     for (formatted_id, dir) in &subjects {
+        subject_idx += 1;
+        let _subject_span = tracing::info_span!(
+            "subject",
+            subject = %formatted_id,
+            subject_idx,
+            total_subjects
+        )
+        .entered();
         let available_task_timeseries: Vec<PathBuf> = fs::read_dir(dir)?
             .filter_map(|entry| entry.ok())
             .map(|entry| entry.path())

@@ -1,12 +1,12 @@
 use anyhow::Result;
-use utils::bids_filename::BidsFilename;
-use utils::bids_subject_id::BidsSubjectId;
-use utils::config::AppConfig;
-use utils::hdf5_io::{H5Attr, open_or_create, open_or_create_group, write_dataset};
 use ndarray::{Array3, s};
 use scirs2_signal::hilbert::hilbert;
 use std::{collections::BTreeMap, fs, path::PathBuf, time::Instant};
 use tracing::{debug, info, warn};
+use utils::bids_filename::BidsFilename;
+use utils::bids_subject_id::BidsSubjectId;
+use utils::config::AppConfig;
+use utils::hdf5_io::{H5Attr, open_or_create, open_or_create_group, write_dataset};
 
 /// Sampling period (TR) in seconds — matches fMRI acquisition.
 const TR: f64 = 0.8;
@@ -164,8 +164,7 @@ fn compute_hht(modes_flat: &[f32], shape: &[usize]) -> Result<HHTResult> {
     for c in 0..n_channels {
         let base = c * n_freq * n_timepoints;
         let standardized = zscore(&hilbert_spectrum_buf[base..base + n_freq * n_timepoints]);
-        std_hilbert_spectrum_buf[base..base + n_freq * n_timepoints]
-            .copy_from_slice(&standardized);
+        std_hilbert_spectrum_buf[base..base + n_freq * n_timepoints].copy_from_slice(&standardized);
     }
 
     Ok(HHTResult {
@@ -300,7 +299,11 @@ fn write_hht(hht_group: &hdf5::Group, result: &HHTResult, force: bool) -> Result
 /// Mirrors the structure of `write_hht` but uses standardized spectra. Envelope is
 /// z-scored per (mode, channel); marginal spectra and full spectrum are z-scored per
 /// channel across the frequency axis.
-fn write_hht_standardized(hht_std_group: &hdf5::Group, result: &HHTResult, force: bool) -> Result<()> {
+fn write_hht_standardized(
+    hht_std_group: &hdf5::Group,
+    result: &HHTResult,
+    force: bool,
+) -> Result<()> {
     write_dataset(
         hht_std_group,
         "envelope",
@@ -390,6 +393,14 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     for (formatted_id, dir) in &subjects {
         subject_idx += 1;
 
+        let _subject_span = tracing::info_span!(
+            "subject",
+            subject = %formatted_id,
+            subject_idx,
+            total_subjects
+        )
+        .entered();
+
         let available_timeseries: Vec<PathBuf> = fs::read_dir(dir)?
             .filter_map(|entry| entry.ok())
             .map(|entry| entry.path())
@@ -400,13 +411,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             })
             .collect();
 
-        info!(
-            subject = formatted_id,
-            subject_idx = subject_idx,
-            total_subjects = total_subjects,
-            num_files = available_timeseries.len(),
-            "processing subject"
-        );
+        info!(num_files = available_timeseries.len(), "processing subject");
 
         for file_path in &available_timeseries {
             let file_result: anyhow::Result<()> = (|| {
@@ -424,7 +429,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     Ok(g) => g,
                     Err(_) => {
                         debug!(
-                            subject = formatted_id,
                             task_name = task_name,
                             "no mvmd group found, skipping (run tcp-mvmd first)"
                         );
@@ -440,17 +444,18 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                 //////////////////////////
 
                 let wb_hht_done = !cfg.force
-                    && hht_group.group("whole-band")
+                    && hht_group
+                        .group("whole-band")
                         .map(|g| g.dataset("hilbert_spectrum").is_ok())
                         .unwrap_or(false);
                 let wb_std_done = !cfg.force
-                    && hht_std_group.group("whole-band")
+                    && hht_std_group
+                        .group("whole-band")
                         .map(|g| g.dataset("hilbert_spectrum").is_ok())
                         .unwrap_or(false);
 
                 if wb_hht_done && wb_std_done {
                     debug!(
-                        subject = formatted_id,
                         task_name = task_name,
                         "whole-band HHT already computed, skipping (use --force to recompute)"
                     );
@@ -458,7 +463,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     match mvmd_group.group("whole-band") {
                         Err(_) => {
                             debug!(
-                                subject = formatted_id,
                                 task_name = task_name,
                                 "no mvmd/whole-band group found, skipping whole-band HHT"
                             );
@@ -474,7 +478,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                             };
 
                             info!(
-                                subject = formatted_id,
                                 task_name = task_name,
                                 n_modes = n_modes,
                                 n_channels = n_channels,
@@ -491,7 +494,16 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                                 let wb_hht_group =
                                     open_or_create_group(&hht_group, "whole-band", cfg.force)?;
                                 if !cfg.force && wb_hht_group.dataset("full_spectrum").is_ok() {
-                                    write_dataset(&wb_hht_group, "hilbert_spectrum", &result.hilbert_spectrum, &result.hilbert_spectrum_shape, Some(&[H5Attr::string("description", "2D Hilbert spectrum H(omega,t): energy summed over modes per channel [n_channels, n_freq, n_timepoints]")]))?;
+                                    write_dataset(
+                                        &wb_hht_group,
+                                        "hilbert_spectrum",
+                                        &result.hilbert_spectrum,
+                                        &result.hilbert_spectrum_shape,
+                                        Some(&[H5Attr::string(
+                                            "description",
+                                            "2D Hilbert spectrum H(omega,t): energy summed over modes per channel [n_channels, n_freq, n_timepoints]",
+                                        )]),
+                                    )?;
                                 } else {
                                     write_hht(&wb_hht_group, &result, cfg.force)?;
                                 }
@@ -500,7 +512,16 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                                 let wb_hht_std_group =
                                     open_or_create_group(&hht_std_group, "whole-band", cfg.force)?;
                                 if !cfg.force && wb_hht_std_group.dataset("full_spectrum").is_ok() {
-                                    write_dataset(&wb_hht_std_group, "hilbert_spectrum", &result.std_hilbert_spectrum, &result.hilbert_spectrum_shape, Some(&[H5Attr::string("standardization", "zscore_per_channel_across_freq_time")]))?;
+                                    write_dataset(
+                                        &wb_hht_std_group,
+                                        "hilbert_spectrum",
+                                        &result.std_hilbert_spectrum,
+                                        &result.hilbert_spectrum_shape,
+                                        Some(&[H5Attr::string(
+                                            "standardization",
+                                            "zscore_per_channel_across_freq_time",
+                                        )]),
+                                    )?;
                                 } else {
                                     write_hht_standardized(&wb_hht_std_group, &result, cfg.force)?;
                                 }
@@ -508,7 +529,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                             let write_duration_ms = write_start.elapsed().as_millis();
 
                             info!(
-                                subject = formatted_id,
                                 task_name = task_name,
                                 n_modes = n_modes,
                                 n_channels = n_channels,
@@ -530,7 +550,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     Ok(g) => g,
                     Err(_) => {
                         debug!(
-                            subject = formatted_id,
                             task_name = task_name,
                             "no mvmd/blocks group found, skipping block HHT"
                         );
@@ -553,17 +572,18 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
 
                 for block_name in &block_names {
                     let block_hht_done = !cfg.force
-                        && hht_blocks_group.group(block_name)
+                        && hht_blocks_group
+                            .group(block_name)
                             .map(|g| g.dataset("hilbert_spectrum").is_ok())
                             .unwrap_or(false);
                     let block_std_done = !cfg.force
-                        && hht_std_blocks_group.group(block_name)
+                        && hht_std_blocks_group
+                            .group(block_name)
                             .map(|g| g.dataset("hilbert_spectrum").is_ok())
                             .unwrap_or(false);
 
                     if block_hht_done && block_std_done {
                         debug!(
-                            subject = formatted_id,
                             task_name = task_name,
                             block = block_name,
                             "block HHT already computed, skipping (use --force to recompute)"
@@ -581,7 +601,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                         _ => {
                             error_count += 1;
                             warn!(
-                                subject = formatted_id,
                                 task_name = task_name,
                                 block = block_name,
                                 shape = ?modes_shape,
@@ -593,7 +612,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     };
 
                     info!(
-                        subject = formatted_id,
                         task_name = task_name,
                         block = block_name,
                         n_modes = n_modes,
@@ -608,7 +626,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                         Err(e) => {
                             error_count += 1;
                             warn!(
-                                subject = formatted_id,
                                 task_name = task_name,
                                 block = block_name,
                                 error = %e,
@@ -625,7 +642,16 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                         let block_hht_group =
                             open_or_create_group(&hht_blocks_group, block_name, cfg.force)?;
                         if !cfg.force && block_hht_group.dataset("full_spectrum").is_ok() {
-                            write_dataset(&block_hht_group, "hilbert_spectrum", &result.hilbert_spectrum, &result.hilbert_spectrum_shape, Some(&[H5Attr::string("description", "2D Hilbert spectrum H(omega,t): energy summed over modes per channel [n_channels, n_freq, n_timepoints]")]))?;
+                            write_dataset(
+                                &block_hht_group,
+                                "hilbert_spectrum",
+                                &result.hilbert_spectrum,
+                                &result.hilbert_spectrum_shape,
+                                Some(&[H5Attr::string(
+                                    "description",
+                                    "2D Hilbert spectrum H(omega,t): energy summed over modes per channel [n_channels, n_freq, n_timepoints]",
+                                )]),
+                            )?;
                         } else {
                             write_hht(&block_hht_group, &result, cfg.force)?;
                         }
@@ -634,7 +660,16 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                         let block_hht_std_group =
                             open_or_create_group(&hht_std_blocks_group, block_name, cfg.force)?;
                         if !cfg.force && block_hht_std_group.dataset("full_spectrum").is_ok() {
-                            write_dataset(&block_hht_std_group, "hilbert_spectrum", &result.std_hilbert_spectrum, &result.hilbert_spectrum_shape, Some(&[H5Attr::string("standardization", "zscore_per_channel_across_freq_time")]))?;
+                            write_dataset(
+                                &block_hht_std_group,
+                                "hilbert_spectrum",
+                                &result.std_hilbert_spectrum,
+                                &result.hilbert_spectrum_shape,
+                                Some(&[H5Attr::string(
+                                    "standardization",
+                                    "zscore_per_channel_across_freq_time",
+                                )]),
+                            )?;
                         } else {
                             write_hht_standardized(&block_hht_std_group, &result, cfg.force)?;
                         }
@@ -642,7 +677,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     let write_duration_ms = write_start.elapsed().as_millis();
 
                     debug!(
-                        subject = formatted_id,
                         task_name = task_name,
                         block = block_name,
                         n_modes = n_modes,
@@ -653,7 +687,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                 }
 
                 info!(
-                    subject = formatted_id,
                     task_name = task_name,
                     num_blocks = block_names.len(),
                     "finished block HHT decompositions"
@@ -665,7 +698,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             if let Err(e) = file_result {
                 error_count += 1;
                 warn!(
-                    subject = formatted_id,
                     file = %file_path.display(),
                     error = %e,
                     "skipping file due to error"
@@ -683,7 +715,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
 
     let total_duration_ms = run_start.elapsed().as_millis();
     info!(
-        total_subjects = total_subjects,
         error_count = error_count,
         total_duration_ms = total_duration_ms,
         "HHT pipeline complete"

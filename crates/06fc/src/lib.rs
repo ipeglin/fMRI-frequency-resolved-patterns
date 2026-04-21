@@ -1,14 +1,14 @@
 use anyhow::Result;
-use utils::bids_filename::BidsFilename;
-use utils::bids_subject_id::BidsSubjectId;
-use utils::config::AppConfig;
-use utils::hdf5_io::{H5Attr, open_or_create, open_or_create_group, write_attrs, write_dataset};
 use ndarray::{Array2, Array3, Axis, concatenate};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 use tracing::{debug, info, warn};
+use utils::bids_filename::BidsFilename;
+use utils::bids_subject_id::BidsSubjectId;
+use utils::config::AppConfig;
+use utils::hdf5_io::{H5Attr, open_or_create, open_or_create_group, write_attrs, write_dataset};
 
 /// fMRI slow-band (Buzsáki) frequency ranges in Hz.
 /// Intervals are [low, high) — a mode with center frequency `f` falls in a band iff low <= f < high.
@@ -72,11 +72,7 @@ fn fisher_z(pearson: &Array2<f64>) -> Array2<f64> {
 
 /// Write both pearson and fisher_z datasets into `group`.
 /// `source` is stored as a group attribute to trace provenance.
-fn write_fc_pair(
-    group: &hdf5::Group,
-    pearson: &Array2<f64>,
-    attrs: &[H5Attr],
-) -> Result<()> {
+fn write_fc_pair(group: &hdf5::Group, pearson: &Array2<f64>, attrs: &[H5Attr]) -> Result<()> {
     let shape = [pearson.nrows(), pearson.ncols()];
     let fz = fisher_z(pearson);
 
@@ -141,7 +137,13 @@ fn write_slow_band_aggregates(
         let members: Vec<usize> = center_frequencies
             .iter()
             .enumerate()
-            .filter_map(|(k, f)| if *f >= *low && *f < *high { Some(k) } else { None })
+            .filter_map(|(k, f)| {
+                if *f >= *low && *f < *high {
+                    Some(k)
+                } else {
+                    None
+                }
+            })
             .collect();
 
         let band_group = open_or_create_group(parent, band_name, force)?;
@@ -302,6 +304,14 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     for (formatted_id, dir) in &subjects {
         subject_idx += 1;
 
+        let _subject_span = tracing::info_span!(
+            "subject",
+            subject = %formatted_id,
+            subject_idx,
+            total_subjects
+        )
+        .entered();
+
         let available_timeseries: Vec<PathBuf> = fs::read_dir(dir)?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
@@ -316,12 +326,11 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
 
         for file_path in &available_timeseries {
             let file_result: anyhow::Result<()> = (|| {
-                let bids = BidsFilename::parse(
-                    match file_path.file_name().and_then(|n| n.to_str()) {
+                let bids =
+                    BidsFilename::parse(match file_path.file_name().and_then(|n| n.to_str()) {
                         Some(name) => name,
                         None => return Ok(()),
-                    },
-                );
+                    });
                 let task_name = bids.get("task").unwrap_or("unknown");
 
                 let h5_file = open_or_create(file_path)?;
@@ -333,11 +342,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                 {
                     let done = !cfg.force && fc_group.group("raw").is_ok();
                     if done {
-                        debug!(
-                            subject = formatted_id,
-                            task_name = task_name,
-                            "fc/raw already computed, skipping"
-                        );
+                        debug!(task_name = task_name, "fc/raw already computed, skipping");
                     } else if let Ok(ds) = h5_file.dataset("tcp_timeseries_raw") {
                         let t0 = Instant::now();
                         let ts = read_timeseries_2d(&ds)?;
@@ -353,7 +358,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                             ],
                         )?;
                         debug!(
-                            subject = formatted_id,
                             task_name = task_name,
                             n = ts.nrows(),
                             duration_ms = t0.elapsed().as_millis(),
@@ -369,7 +373,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     let done = !cfg.force && fc_group.group("standardized").is_ok();
                     if done {
                         debug!(
-                            subject = formatted_id,
                             task_name = task_name,
                             "fc/standardized already computed, skipping"
                         );
@@ -377,8 +380,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                         let t0 = Instant::now();
                         let ts = read_timeseries_2d(&ds)?;
                         let pearson = pearson_matrix(&ts);
-                        let std_group =
-                            open_or_create_group(&fc_group, "standardized", cfg.force)?;
+                        let std_group = open_or_create_group(&fc_group, "standardized", cfg.force)?;
                         write_fc_pair(
                             &std_group,
                             &pearson,
@@ -389,7 +391,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                             ],
                         )?;
                         debug!(
-                            subject = formatted_id,
                             task_name = task_name,
                             duration_ms = t0.elapsed().as_millis(),
                             "computed fc/standardized"
@@ -422,8 +423,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                                 "subcortical_raw",
                             )?;
                             let pearson = pearson_matrix(&ts);
-                            let out =
-                                open_or_create_group(&fc_blocks_raw, block_name, cfg.force)?;
+                            let out = open_or_create_group(&fc_blocks_raw, block_name, cfg.force)?;
                             write_fc_pair(
                                 &out,
                                 &pearson,
@@ -435,7 +435,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                             )?;
                         }
                         debug!(
-                            subject = formatted_id,
                             task_name = task_name,
                             num_blocks = block_names.len(),
                             "computed fc/blocks_raw"
@@ -468,8 +467,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                                 "subcortical_standardized",
                             )?;
                             let pearson = pearson_matrix(&ts);
-                            let out =
-                                open_or_create_group(&fc_blocks_std, block_name, cfg.force)?;
+                            let out = open_or_create_group(&fc_blocks_std, block_name, cfg.force)?;
                             write_fc_pair(
                                 &out,
                                 &pearson,
@@ -484,7 +482,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                             )?;
                         }
                         debug!(
-                            subject = formatted_id,
                             task_name = task_name,
                             num_blocks = block_names.len(),
                             "computed fc/blocks_standardized"
@@ -499,11 +496,9 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     let fc_mvmd_group = open_or_create_group(&fc_group, "mvmd", cfg.force)?;
 
                     if let Ok(wb_group) = mvmd_group.group("whole-band") {
-                        let already =
-                            !cfg.force && fc_mvmd_group.group("whole-band").is_ok();
+                        let already = !cfg.force && fc_mvmd_group.group("whole-band").is_ok();
                         if already {
                             debug!(
-                                subject = formatted_id,
                                 task_name = task_name,
                                 "fc/mvmd/whole-band already computed, skipping"
                             );
@@ -511,19 +506,11 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                             let t0 = Instant::now();
                             let modes = read_modes_3d(&wb_group)?;
                             let cfreqs = read_center_frequencies(&wb_group)?;
-                            let fc_wb = open_or_create_group(
-                                &fc_mvmd_group,
-                                "whole-band",
-                                cfg.force,
-                            )?;
+                            let fc_wb =
+                                open_or_create_group(&fc_mvmd_group, "whole-band", cfg.force)?;
                             let per_mode_fz =
                                 process_mvmd_modes(&fc_wb, &modes, &cfreqs, cfg.force)?;
-                            write_slow_band_aggregates(
-                                &fc_wb,
-                                &per_mode_fz,
-                                &cfreqs,
-                                cfg.force,
-                            )?;
+                            write_slow_band_aggregates(&fc_wb, &per_mode_fz, &cfreqs, cfg.force)?;
                             write_attrs(
                                 &fc_wb,
                                 &[
@@ -533,7 +520,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                                 ],
                             )?;
                             debug!(
-                                subject = formatted_id,
                                 task_name = task_name,
                                 n_modes = modes.shape()[0],
                                 duration_ms = t0.elapsed().as_millis(),
@@ -560,19 +546,11 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                                 let src_block = mvmd_blocks_group.group(block_name)?;
                                 let modes = read_modes_3d(&src_block)?;
                                 let cfreqs = read_center_frequencies(&src_block)?;
-                                let out = open_or_create_group(
-                                    &fc_mvmd_blocks,
-                                    block_name,
-                                    cfg.force,
-                                )?;
+                                let out =
+                                    open_or_create_group(&fc_mvmd_blocks, block_name, cfg.force)?;
                                 let per_mode_fz =
                                     process_mvmd_modes(&out, &modes, &cfreqs, cfg.force)?;
-                                write_slow_band_aggregates(
-                                    &out,
-                                    &per_mode_fz,
-                                    &cfreqs,
-                                    cfg.force,
-                                )?;
+                                write_slow_band_aggregates(&out, &per_mode_fz, &cfreqs, cfg.force)?;
                                 write_attrs(
                                     &out,
                                     &[
@@ -583,7 +561,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                                 )?;
                             }
                             debug!(
-                                subject = formatted_id,
                                 task_name = task_name,
                                 num_blocks = block_names.len(),
                                 "computed fc/mvmd/blocks"
@@ -593,9 +570,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                 }
 
                 info!(
-                    subject = formatted_id,
-                    subject_idx = subject_idx,
-                    total_subjects = total_subjects,
                     task_name = task_name,
                     file = %file_path.display(),
                     "fc file complete"
@@ -606,7 +580,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             if let Err(e) = file_result {
                 error_count += 1;
                 warn!(
-                    subject = formatted_id,
                     file = %file_path.display(),
                     error = %e,
                     "skipping file due to error"
@@ -616,11 +589,13 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     }
 
     if error_count > 0 {
-        warn!(error_count = error_count, "some files were skipped due to errors");
+        warn!(
+            error_count = error_count,
+            "some files were skipped due to errors"
+        );
     }
 
     info!(
-        total_subjects = total_subjects,
         error_count = error_count,
         total_duration_ms = run_start.elapsed().as_millis(),
         "FC pipeline complete"

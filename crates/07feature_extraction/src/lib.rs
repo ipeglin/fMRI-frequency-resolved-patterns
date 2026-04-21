@@ -4,13 +4,13 @@ mod models;
 use std::{collections::BTreeMap, fs, path::PathBuf, time::Instant};
 
 use anyhow::Result;
+use tch::{Kind, Tensor};
+use tracing::{debug, info, warn};
 use utils::atlas::BrainAtlas;
 use utils::bids_filename::BidsFilename;
 use utils::bids_subject_id::BidsSubjectId;
 use utils::config::AppConfig;
 use utils::hdf5_io::{H5Attr, open_or_create_group, write_attrs, write_dataset};
-use tch::{Kind, Tensor};
-use tracing::{debug, info, warn};
 
 pub use feature_extractor::FeatureExtractor;
 
@@ -33,7 +33,9 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     let weights_path = cfg.feature_extraction.cnn_weights_path.as_deref();
     let extractor = FeatureExtractor::new(weights_path, 1)?;
     match weights_path {
-        Some(p) => info!(weights = %p.display(), "DenseNet-201 initialised with pretrained weights"),
+        Some(p) => {
+            info!(weights = %p.display(), "DenseNet-201 initialised with pretrained weights")
+        }
         None => info!("DenseNet-201 initialised with random weights"),
     }
 
@@ -78,6 +80,21 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     for (formatted_id, dir) in &subjects {
         subject_idx += 1;
 
+        let _subject_span = tracing::info_span!(
+            "subject",
+            subject = %formatted_id,
+            subject_idx,
+            total_subjects
+        )
+        .entered();
+
+        let _subject_span = tracing::info_span!(
+            "subject_processing",
+            subject = %formatted_id,
+            total_subjects = total_subjects
+        )
+        .entered();
+
         let available_timeseries: Vec<PathBuf> = fs::read_dir(dir)?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
@@ -91,15 +108,15 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             })
             .collect();
 
-        info!(
-            subject = formatted_id,
-            subject_idx = subject_idx,
-            total_subjects = total_subjects,
-            num_files = available_timeseries.len(),
-            "processing subject"
-        );
+        info!(num_files = available_timeseries.len(), "processing subject");
 
         for file_path in &available_timeseries {
+            let _file_span = tracing::info_span!(
+                "file_processing",
+                file = %file_path.display()
+            )
+            .entered();
+
             let file_result: anyhow::Result<()> = (|| {
                 let bids =
                     BidsFilename::parse(match file_path.file_name().and_then(|n| n.to_str()) {
@@ -128,7 +145,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                 match cwt_root {
                     Err(_) => {
                         debug!(
-                            subject = formatted_id,
                             task_name = task_name,
                             "no CWT group found, skipping (run cwt first)"
                         );
@@ -193,7 +209,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                 match h5_file.group("hht") {
                     Err(_) => {
                         debug!(
-                            subject = formatted_id,
                             task_name = task_name,
                             "no HHT group found, skipping (run hilbert first)"
                         );
@@ -252,7 +267,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             if let Err(e) = file_result {
                 error_count += 1;
                 warn!(
-                    subject = formatted_id,
+
                     file = %file_path.display(),
                     error = %e,
                     "skipping file due to error"
@@ -270,7 +285,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
 
     let total_duration_ms = run_start.elapsed().as_millis();
     info!(
-        total_subjects = total_subjects,
         error_count = error_count,
         total_duration_ms = total_duration_ms,
         "feature extraction pipeline complete"
@@ -293,7 +307,7 @@ fn process_cwt_subgroup(
     roi_indices: &[i64],
     labels_joined: &str,
     force: bool,
-    subject: &str,
+    _subject: &str,
     task_name: &str,
 ) -> Result<()> {
     let ds = source_group.dataset("scalogram")?;
@@ -314,7 +328,6 @@ fn process_cwt_subgroup(
 
     if features_parent.group(out_name).is_ok() && !force {
         info!(
-            subject = subject,
             task_name = task_name,
             subgroup = out_name,
             "CWT features already present, skipping (use --force to recompute)"
@@ -325,20 +338,13 @@ fn process_cwt_subgroup(
     let data_f64: Vec<f64> = ds.read_raw()?;
     let data_f32: Vec<f32> = data_f64.iter().map(|&v| v as f32).collect();
 
-    let scalogram_t = Tensor::from_slice(&data_f32)
-        .reshape([n_rois as i64, n_scales as i64, n_timepoints as i64]);
+    let scalogram_t = Tensor::from_slice(&data_f32).reshape([
+        n_rois as i64,
+        n_scales as i64,
+        n_timepoints as i64,
+    ]);
     let scalogram_t = scalogram_t.index_select(0, roi_index_tensor);
     let n_rois_sel = roi_indices.len();
-
-    info!(
-        subject = subject,
-        task_name = task_name,
-        subgroup = out_name,
-        n_rois = n_rois_sel,
-        n_scales = n_scales,
-        n_timepoints = n_timepoints,
-        "extracting CWT scalogram features"
-    );
 
     let extract_start = Instant::now();
     let (per_roi, mean) = extract_features_with_mean(extractor, &scalogram_t);
@@ -346,15 +352,25 @@ fn process_cwt_subgroup(
     let feature_dim = mean.size1()?;
 
     info!(
-        subject = subject,
         task_name = task_name,
         subgroup = out_name,
+        n_rois = n_rois_sel,
+        n_scales = n_scales,
+        n_timepoints = n_timepoints,
         feature_dim = feature_dim,
         extract_duration_ms = extract_duration_ms,
-        "CWT scalogram features extracted"
+        "extracted CWT scalogram features"
     );
 
-    write_feature_group(features_parent, out_name, &per_roi, &mean, roi_indices, labels_joined, force)?;
+    write_feature_group(
+        features_parent,
+        out_name,
+        &per_roi,
+        &mean,
+        roi_indices,
+        labels_joined,
+        force,
+    )?;
     Ok(())
 }
 
@@ -368,7 +384,7 @@ fn process_hht_subgroup(
     roi_indices: &[i64],
     labels_joined: &str,
     force: bool,
-    subject: &str,
+    _subject: &str,
     task_name: &str,
 ) -> Result<()> {
     let ds = source_group.dataset("full_spectrum")?;
@@ -389,7 +405,6 @@ fn process_hht_subgroup(
 
     if features_parent.group(out_name).is_ok() && !force {
         info!(
-            subject = subject,
             task_name = task_name,
             subgroup = out_name,
             "HHT features already present, skipping (use --force to recompute)"
@@ -400,19 +415,10 @@ fn process_hht_subgroup(
     let data_f64: Vec<f64> = ds.read_raw()?;
     let data_f32: Vec<f32> = data_f64.iter().map(|&v| v as f32).collect();
 
-    let spectrum_t = Tensor::from_slice(&data_f32)
-        .reshape([n_channels as i64, 1, n_freq_bins as i64]);
+    let spectrum_t =
+        Tensor::from_slice(&data_f32).reshape([n_channels as i64, 1, n_freq_bins as i64]);
     let spectrum_t = spectrum_t.index_select(0, roi_index_tensor);
     let n_channels_sel = roi_indices.len();
-
-    info!(
-        subject = subject,
-        task_name = task_name,
-        subgroup = out_name,
-        n_channels = n_channels_sel,
-        n_freq_bins = n_freq_bins,
-        "extracting HHT spectrogram features"
-    );
 
     let extract_start = Instant::now();
     let (per_roi, mean) = extract_features_with_mean(extractor, &spectrum_t);
@@ -420,15 +426,24 @@ fn process_hht_subgroup(
     let feature_dim = mean.size1()?;
 
     info!(
-        subject = subject,
         task_name = task_name,
         subgroup = out_name,
+        n_channels = n_channels_sel,
+        n_freq_bins = n_freq_bins,
         feature_dim = feature_dim,
         extract_duration_ms = extract_duration_ms,
-        "HHT spectrogram features extracted"
+        "extracted HHT spectrogram features"
     );
 
-    write_feature_group(features_parent, out_name, &per_roi, &mean, roi_indices, labels_joined, force)?;
+    write_feature_group(
+        features_parent,
+        out_name,
+        &per_roi,
+        &mean,
+        roi_indices,
+        labels_joined,
+        force,
+    )?;
     Ok(())
 }
 
@@ -508,7 +523,10 @@ pub fn extract_features_with_mean(
 }
 
 fn tensor_to_vec_f32(t: &Tensor) -> Vec<f32> {
-    let flat = t.to_kind(Kind::Float).to_device(tch::Device::Cpu).contiguous();
+    let flat = t
+        .to_kind(Kind::Float)
+        .to_device(tch::Device::Cpu)
+        .contiguous();
     let numel = flat.numel();
     let mut out = vec![0f32; numel];
     flat.copy_data(&mut out, numel);
