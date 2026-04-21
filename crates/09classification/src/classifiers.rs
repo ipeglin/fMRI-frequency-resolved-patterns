@@ -1,4 +1,4 @@
 mod knn;
 mod svm;
 
-pub use knn::{KNN, KnnConfig};
+pub use knn::{DistanceMetric, KNN, KnnConfig, accuracy, confusion_matrix_binary};

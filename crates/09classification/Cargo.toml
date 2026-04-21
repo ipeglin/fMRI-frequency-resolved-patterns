@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = { workspace = true }
 hdf5 = { workspace = true }
+ndarray = { workspace = true }
 tracing = { workspace = true }
 polars = { workspace = true }
 polars-io = { workspace = true }

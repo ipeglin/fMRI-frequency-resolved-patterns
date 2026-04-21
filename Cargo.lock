@@ -499,6 +499,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "hdf5",
+ "ndarray 0.15.6",
  "polars",
  "polars-io",
  "tracing",
