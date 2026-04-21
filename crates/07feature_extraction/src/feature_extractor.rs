@@ -69,7 +69,7 @@ impl FeatureExtractor {
 fn load_pretrained(vs: &mut nn::VarStore, path: &Path) -> Result<()> {
     use std::collections::HashMap;
 
-    let named = Tensor::load_multi_with_device(path, vs.device())
+    let named = Tensor::read_safetensors(path)
         .with_context(|| format!("failed to read weights from {}", path.display()))?;
 
     let mut src: HashMap<String, Tensor> = named.into_iter().collect();
