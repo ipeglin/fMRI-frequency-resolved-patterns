@@ -12,8 +12,8 @@ use utils::config::AppConfig;
 use crate::classifiers::{DistanceMetric, KNN, KnnConfig, accuracy, confusion_matrix_binary};
 use crate::dataset::{
     FcFlatten, FcSelection, FcSpec, FeatureAggregation, FeatureSource, FeatureSpec,
-    FeatureSubgroup, Label, build_dataset, build_fc_dataset, detect_n_rois, load_labels,
-    load_subject_ids, read_roi_metadata,
+    FeatureSubgroup, Label, build_dataset, build_fc_dataset, detect_block_indices, detect_n_rois,
+    load_labels, load_subject_ids, read_roi_metadata,
 };
 
 pub fn run(cfg: &AppConfig) -> Result<()> {
@@ -71,75 +71,32 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     };
 
     // =========================================================================
-    // DenseNet feature experiments
+    // DenseNet feature experiments — sweep {Cwt, Hht} × {whole-band, each block}
     // =========================================================================
-    let source = FeatureSource::Cwt;
-    let subgroup = FeatureSubgroup::WholeBand;
+    for source in [FeatureSource::Cwt, FeatureSource::Hht] {
+        let block_indices = detect_block_indices(&cfg.parcellated_ts_dir, &train_ids, source);
+        let mut subgroups: Vec<FeatureSubgroup> = vec![FeatureSubgroup::WholeBand];
+        subgroups.extend(block_indices.iter().map(|&n| FeatureSubgroup::Block(n)));
 
-    // Aggregate: one mean vector per trial (collapses across the 28 ROIs).
-    let mean_spec = FeatureSpec {
-        source,
-        subgroup: subgroup.clone(),
-        aggregation: FeatureAggregation::Mean,
-    };
-    info!(spec = ?mean_spec, config = ?knn_cfg, "KNN — feature: mean across ROIs");
-    run_feature_experiment(
-        cfg,
-        &train_ids,
-        &test_ids,
-        &val_ids,
-        &labels,
-        &mean_spec,
-        &knn_cfg,
-        "feat_mean",
-    )?;
+        info!(
+            source = ?source,
+            n_subgroups = subgroups.len(),
+            n_blocks = block_indices.len(),
+            "densenet sweep: source discovered"
+        );
 
-    // Concat all 28 per-ROI feature rows into one big vector per trial.
-    let concat_spec = FeatureSpec {
-        source,
-        subgroup: subgroup.clone(),
-        aggregation: FeatureAggregation::Concat,
-    };
-    info!(spec = ?concat_spec, "KNN — feature: all 28 ROIs concat");
-    run_feature_experiment(
-        cfg,
-        &train_ids,
-        &test_ids,
-        &val_ids,
-        &labels,
-        &concat_spec,
-        &knn_cfg,
-        "feat_concat",
-    )?;
-
-    // Per-ROI: one classifier per ROI. Prefer labels stored in h5; fall back to atlas.
-    let n_rois = detect_n_rois(&cfg.parcellated_ts_dir, &train_ids, source, &subgroup)
-        .context("detecting n_rois from training data")?;
-    let (h5_labels, _h5_indices) =
-        read_roi_metadata(&cfg.parcellated_ts_dir, &train_ids, source, &subgroup)
-            .unwrap_or_default();
-    let per_roi_names: Vec<String> = (0..n_rois)
-        .map(|i| {
-            h5_labels
-                .get(i)
-                .cloned()
-                .or_else(|| atlas_roi_labels.get(i).cloned())
-                .unwrap_or_else(|| format!("roi_{}", i))
-        })
-        .collect();
-    info!(n_rois = n_rois, "per-ROI sweep starting");
-
-    for (roi, roi_label) in per_roi_names.iter().enumerate() {
-        let spec = FeatureSpec {
-            source,
-            subgroup: subgroup.clone(),
-            aggregation: FeatureAggregation::PerRoi(roi),
-        };
-        let tag = format!("feat_roi_{:02}_{}", roi, sanitize(roi_label));
-        if let Err(e) = run_feature_experiment(
-            cfg, &train_ids, &test_ids, &val_ids, &labels, &spec, &knn_cfg, &tag,
-        ) {
-            warn!(roi = roi, roi_label = %roi_label, error = %e, "per-ROI experiment failed");
+        for subgroup in &subgroups {
+            run_densenet_subgroup(
+                cfg,
+                &train_ids,
+                &test_ids,
+                &val_ids,
+                &labels,
+                &atlas_roi_labels,
+                &knn_cfg,
+                source,
+                subgroup,
+            );
         }
     }
 
@@ -221,6 +178,104 @@ fn sanitize(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect()
+}
+
+/// Run mean / concat / per-ROI KNN experiments for one (source, subgroup) pair.
+/// Tag format: `feat_<source>_<wb|blk_NN>_<mean|concat|roi_XX_<label>>`. Errors
+/// are logged and do not abort the outer sweep.
+#[allow(clippy::too_many_arguments)]
+fn run_densenet_subgroup(
+    cfg: &AppConfig,
+    train_ids: &[String],
+    test_ids: &[String],
+    val_ids: &[String],
+    labels: &HashMap<String, Label>,
+    atlas_roi_labels: &[String],
+    knn_cfg: &KnnConfig,
+    source: FeatureSource,
+    subgroup: &FeatureSubgroup,
+) {
+    let source_tag = match source {
+        FeatureSource::Cwt => "cwt",
+        FeatureSource::Hht => "hht",
+    };
+    let subgroup_tag = match subgroup {
+        FeatureSubgroup::WholeBand => "wb".to_string(),
+        FeatureSubgroup::Block(n) => format!("blk_{:02}", n),
+    };
+    let prefix = format!("feat_{}_{}", source_tag, subgroup_tag);
+
+    let mean_spec = FeatureSpec {
+        source,
+        subgroup: subgroup.clone(),
+        aggregation: FeatureAggregation::Mean,
+    };
+    info!(prefix = %prefix, spec = ?mean_spec, "KNN — feature: mean across ROIs");
+    if let Err(e) = run_feature_experiment(
+        cfg,
+        train_ids,
+        test_ids,
+        val_ids,
+        labels,
+        &mean_spec,
+        knn_cfg,
+        &format!("{}_mean", prefix),
+    ) {
+        warn!(prefix = %prefix, error = %e, "mean experiment failed");
+    }
+
+    let concat_spec = FeatureSpec {
+        source,
+        subgroup: subgroup.clone(),
+        aggregation: FeatureAggregation::Concat,
+    };
+    info!(prefix = %prefix, spec = ?concat_spec, "KNN — feature: all ROIs concat");
+    if let Err(e) = run_feature_experiment(
+        cfg,
+        train_ids,
+        test_ids,
+        val_ids,
+        labels,
+        &concat_spec,
+        knn_cfg,
+        &format!("{}_concat", prefix),
+    ) {
+        warn!(prefix = %prefix, error = %e, "concat experiment failed");
+    }
+
+    let n_rois = match detect_n_rois(&cfg.parcellated_ts_dir, train_ids, source, subgroup) {
+        Ok(n) => n,
+        Err(e) => {
+            warn!(prefix = %prefix, error = %e, "could not detect n_rois, skipping per-ROI sweep");
+            return;
+        }
+    };
+    let (h5_labels, _h5_indices) =
+        read_roi_metadata(&cfg.parcellated_ts_dir, train_ids, source, subgroup).unwrap_or_default();
+    let per_roi_names: Vec<String> = (0..n_rois)
+        .map(|i| {
+            h5_labels
+                .get(i)
+                .cloned()
+                .or_else(|| atlas_roi_labels.get(i).cloned())
+                .unwrap_or_else(|| format!("roi_{}", i))
+        })
+        .collect();
+    info!(prefix = %prefix, n_rois = n_rois, "per-ROI sweep starting");
+
+    for (roi, roi_label) in per_roi_names.iter().enumerate() {
+        let spec = FeatureSpec {
+            source,
+            subgroup: subgroup.clone(),
+            aggregation: FeatureAggregation::PerRoi(roi),
+        };
+        let tag = format!("{}_roi_{:02}_{}", prefix, roi, sanitize(roi_label));
+        if let Err(e) = run_feature_experiment(
+            cfg, train_ids, test_ids, val_ids, labels, &spec, knn_cfg, &tag,
+        ) {
+            warn!(prefix = %prefix, roi = roi, roi_label = %roi_label, error = %e, "per-ROI experiment failed");
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

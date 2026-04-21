@@ -289,6 +289,42 @@ pub fn detect_n_rois(
     bail!("could not detect n_rois: no readable per_roi dataset in any subject")
 }
 
+/// Discover block indices present under `features/<source>/blocks/` by probing
+/// the first reachable `.h5` in `subjects`. Parses names matching `block_<N>`.
+/// Returns sorted, deduped indices; empty if no blocks exist.
+pub fn detect_block_indices(
+    parcellated_ts_dir: &Path,
+    subjects: &[String],
+    source: FeatureSource,
+) -> Vec<usize> {
+    let blocks_path = format!("features/{}/blocks", source.dir());
+    for subject in subjects {
+        let dir = parcellated_ts_dir.join(subject);
+        let Ok(files) = list_subject_h5(&dir) else {
+            continue;
+        };
+        for file in files {
+            let Ok(f) = hdf5::File::open(&file) else {
+                continue;
+            };
+            let Ok(g) = f.group(&blocks_path) else {
+                continue;
+            };
+            let Ok(names) = g.member_names() else {
+                continue;
+            };
+            let mut indices: Vec<usize> = names
+                .iter()
+                .filter_map(|n| n.strip_prefix("block_").and_then(|s| s.parse().ok()))
+                .collect();
+            indices.sort_unstable();
+            indices.dedup();
+            return indices;
+        }
+    }
+    Vec::new()
+}
+
 /// Read `(labels, roi_indices)` from the first available features subgroup.
 ///
 /// Labels come from the group-level `labels` attribute (comma-separated). ROI
