@@ -8,6 +8,12 @@ PROJECT_ROOT="$1"
 WEIGHTS_DIR="$2"
 CONFIG_FILE="$PROJECT_ROOT/config.toml"
 
+# --- CONFIGURATION ---
+GH_USER="ipeglin"
+GH_REPO="masters-thesis-supplementary"
+GH_BRANCH="main"
+WEIGHTS_FILE_PATH="data/processed/densenet201_imagenet.safetensors"
+
 if [ ! -f "$CONFIG_FILE" ]; then
     log_err "config file $CONFIG_FILE not found."
     exit 1
@@ -15,9 +21,9 @@ fi
 
 mkdir -p "$WEIGHTS_DIR"
 
-# DenseNet201 Weights URL
-DENSENET_URL="https://github.com/ipeglin/masters-thesis-supplementary/raw/main/data/processed/densenet201_imagenet.safetensors"
-DENSENET_FILE="$WEIGHTS_DIR/densenet201_imagenet.safetensors"
+# DenseNet201 Weights URL constructed using variables
+DENSENET_URL="https://github.com/$GH_USER/$GH_REPO/raw/$GH_BRANCH/$WEIGHTS_FILE_PATH"
+DENSENET_FILE="$WEIGHTS_DIR/$(basename "$WEIGHTS_FILE_PATH")"
 
 log_info "CNN Weights output directory set to: $WEIGHTS_DIR"
 
