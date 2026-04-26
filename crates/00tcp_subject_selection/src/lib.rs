@@ -603,7 +603,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     write_sorted(filter_output_dir.join("controls.csv"), &healthy_controls_df)?;
     write_sorted(
         csv_output_dir.join("crate-00_filter-controls.csv"),
-        &demos_df,
+        &healthy_controls_df,
     )?;
 
     // Major Depressive Disorder
@@ -664,7 +664,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     write_sorted(filter_output_dir.join("anhedonic.csv"), &anhedonic_df)?;
     write_sorted(
         csv_output_dir.join("crate-00_filter-anhedonic.csv"),
-        &demos_df,
+        &anhedonic_df,
     )?;
 
     Ok(())
