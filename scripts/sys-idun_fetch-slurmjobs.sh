@@ -47,6 +47,9 @@ while read -r DOWNLOAD_URL; do
         FILENAME=$(basename "$DOWNLOAD_URL")
         TARGET_FILE="$SLURM_DEST_DIR/$FILENAME"
 
+        # Optional: Remove old local version before downloading to ensure a clean state
+        rm -f "$TARGET_FILE"
+
         log_info "Downloading and configuring $FILENAME..."
         curl -L -s -f -H "Cache-Control: no-cache" "$DOWNLOAD_URL" -o "$TARGET_FILE"
 
@@ -54,15 +57,17 @@ while read -r DOWNLOAD_URL; do
             # --- SCALABLE INJECTION ---
             for KEY in "${!REPLACEMENTS[@]}"; do
                 VALUE="${REPLACEMENTS[$KEY]}"
-                # Replaces 'KEY = ""' or 'KEY=""'
+                # Replaces 'KEY = ""' or 'KEY=""' at start of line
                 sed -i "s|^$KEY = .*|$KEY=\"$VALUE\"|g" "$TARGET_FILE"
                 sed -i "s|^$KEY=.*|$KEY=\"$VALUE\"|g" "$TARGET_FILE"
             done
 
             # --- SPECIFIC FIX FOR SLURM HEADERS ---
-            # Replaces the literal string '$USER' with your actual username
-            # so Slurm can read the paths correctly.
-            sed -i "s|\$USER|$CURRENT_USER|g" "$TARGET_FILE"
+            # Fixed: Added \b (word boundary) so $USER_NAME is NOT matched by $USER
+            sed -i "s|\$USER\b|$CURRENT_USER|g" "$TARGET_FILE"
+
+            # Additional robustness: handle ${USER} if used
+            sed -i "s|\${USER}|$CURRENT_USER|g" "$TARGET_FILE"
 
             log_success "Configured $FILENAME for user $CURRENT_USER"
             chmod +x "$TARGET_FILE"
