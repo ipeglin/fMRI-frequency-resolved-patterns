@@ -339,6 +339,15 @@ fn process_cwt_scalogram(
     Ok(())
 }
 
+/// True if `parent/name` exists and carries the named completion-sentinel attr.
+/// Sentinels are written last in each `fc_for_*` so their presence proves the
+/// prior run finished writing all FC + Fisher-Z matrices for that subgroup.
+fn subgroup_complete(parent: &hdf5::Group, name: &str, sentinel_attr: &str) -> bool {
+    parent
+        .group(name)
+        .map_or(false, |g| g.attr(sentinel_attr).is_ok())
+}
+
 /// FC for one MVMD subgroup (e.g. `/mvmd/full_run_raw` or `/mvmd/blocks_raw/block_X`).
 /// Writes per-mode FC + slow-band aggregates under `fc_parent/name`.
 fn fc_for_mvmd_subgroup(
@@ -361,11 +370,19 @@ fn fc_for_mvmd_subgroup(
     };
 
     if !force && fc_parent.group(name).is_ok() {
-        debug!(
-            task_name = task_name,
-            group = name,
-            "fc/mvmd subgroup already computed, skipping (use --force to recompute)"
-        );
+        if subgroup_complete(fc_parent, name, "n_modes") {
+            debug!(
+                task_name = task_name,
+                group = name,
+                "fc/mvmd subgroup already computed, skipping (use --force to recompute)"
+            );
+        } else {
+            warn!(
+                task_name = task_name,
+                group = name,
+                "fc/mvmd subgroup exists but is incomplete (no n_modes sentinel) — skipping; rerun with --force to recompute"
+            );
+        }
         return Ok(());
     }
 
@@ -453,11 +470,19 @@ fn fc_for_cwt_dataset(
     force: bool,
 ) -> Result<()> {
     if !force && fc_parent.group(name).is_ok() {
-        debug!(
-            task_name = task_name,
-            group = name,
-            "fc/cwt subgroup already computed, skipping (use --force to recompute)"
-        );
+        if subgroup_complete(fc_parent, name, "n_channels") {
+            debug!(
+                task_name = task_name,
+                group = name,
+                "fc/cwt subgroup already computed, skipping (use --force to recompute)"
+            );
+        } else {
+            warn!(
+                task_name = task_name,
+                group = name,
+                "fc/cwt subgroup exists but is incomplete (no n_channels sentinel) — skipping; rerun with --force to recompute"
+            );
+        }
         return Ok(());
     }
 
