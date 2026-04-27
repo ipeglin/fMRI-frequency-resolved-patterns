@@ -1,126 +1,146 @@
-# TCP fMRI Preprocessing Pipeline
+# 🧠 TCP fMRI Preprocessing Pipeline
 
-Rust fMRI preprocessing pipeline for TCP (Transdiagnostic Connectomes Project) dataset. 
+A high-performance Rust-based preprocessing pipeline for the **Transdiagnostic Connectomes Project (TCP)** dataset.
 
-## Pipeline Stages
+---
 
-Execution order (crates 00-09):
-1. **00tcp_subject_selection**: Filter subjects
-2. **01fmri_parcellation**: Parcellate regions
-3. **02fmri_segment_trials**: Segment timeseries
-4. **03cwt**: Wavelet transform
-5. **04mvmd**: Multivariate Mode Decomposition 
-6. **05hilbert**: Hilbert transform
-7. **06fc**: Functional connectivity
-8. **07feature_extraction**: Extract features (CNN)
-10. **08classification**: Model classification
+## 🏗️ Pipeline Stages
 
-**utils**: Shared helpers.
-**cli**: Pipeline CLI.
+The pipeline consists of 9 sequential stages (crates `00`–`08`). **Execution order is mandatory** as each stage depends on the output of the previous one:
 
-## Prerequisites
-Rust 1.82.0+. Git-annex for large data. HDF5 for timeseries. Libtorch (PyTorch C++ API) for deep learning features.
+1.  **`00tcp_subject_selection`**: Filter subjects based on criteria.
+2.  **`01fmri_parcellation`**: Parcellate brain regions.
+3.  **`02fmri_segment_trials`**: Segment timeseries data.
+4.  **`03cwt`**: Perform Wavelet transform.
+5.  **`04mvmd`**: Multivariate Mode Decomposition.
+6.  **`05hilbert`**: Apply Hilbert transform.
+7.  **`06fc`**: Compute Functional Connectivity.
+8.  **`07feature_extraction`**: Extract features using CNNs.
+9.  **`08classification`**: Perform model classification.
 
-## Setup & Initialization
+* **`utils`**: Shared helper functions.
+* **`cli`**: Main Pipeline Command Line Interface.
 
-Run main initialization script to prepare paths, atlases, and system environment.
+---
+
+## 📋 Prerequisites
+
+* **Rust**: Version 1.82.0+.
+* **Git-annex**: For managing large datasets.
+* **HDF5**: Required for timeseries storage.
+* **Libtorch**: PyTorch C++ API for deep learning features (Stage 07).
+
+---
+
+## 🛠️ Setup & Initialization
+
+Run the main initialization script to prepare paths, download required atlases, and configure the environment.
 
 ```bash
-# Initialize project paths, download atlases, and build dependencies
 bash ./scripts/init.sh
 ```
 
-### IDUN Cluster Setup
-
-IDUN needs specific modules and environment prep. The `init.sh` script handles this if it detects IDUN. Trigger cluster mode by passing `idun` argument OR creating `.sys-idun` file.
+### 🏫 IDUN Cluster Setup
+The script also provides IDUN-specific setup such as handling modules and building HDF5. To enable this, either pass `idun` as an argument or create a trigger file named `.sys-idun` in the project root before running the init script:
 
 ```bash
 # Option 1: Pass idun argument
 bash ./scripts/init.sh idun
 
-# Option 2: Empty trigger file
-touch .sys-idun
-bash ./scripts/init.sh
-```
-This auto-loads IDUN specific config defaults and builds HDF5 (if missing). 
-
-**CRITICAL (IDUN):** After running `init.sh`, you must source the environment script to load Rust and CUDA modules into your current shell session:
-```bash
-source ./scripts/sys-idun_env.sh
+# Option 2: Use a trigger file
+touch .sys-idun && bash ./scripts/init.sh
 ```
 
-This script will automatically detect if `LIBTORCH` is exported in your environment (e.g. from your `~/.bashrc`). If missing, it will automatically download the correct PyTorch CUDA binaries (`libtorch`) into `$HOME/libtorch`, and configure `LD_LIBRARY_PATH` for your session.
+> [!IMPORTANT]
+> **Post-Init Action (IDUN):** After initialization, you **must** source the environment script to load Rust and CUDA modules into your current session:
+> ```bash
+> source ./scripts/sys-idun_env.sh
+> ```
+> This script also downloads `libtorch` to `$HOME/libtorch` if it is not found in your environment.
 
-### Local Machine Setup
+### 💻 Local Machine Setup
 
-**CRITICAL:** Run `bash scripts/init.sh` on local (Mac/Windows/Linux). It copies `config.toml` and fetches atlases. But **you MUST manually edit `config.toml`** and set your local directory paths (`tcp_repo_dir`, `fmriprep_output_dir`, etc.) after script finishes.
+> [!CAUTION]
+> **Manual Config Required:** On local machines, you **must** edit `config.toml` after running the init script. Set your local directory paths for `tcp_repo_dir`, `fmriprep_output_dir`, etc. manually.
 
-**Local Libtorch Setup:** You must manually download and configure Libtorch to compile the CNN models (Stage 07).
-1. Download the appropriate [PyTorch C++ Library (LibTorch)](https://pytorch.org/) (CPU, MPS/Apple Silicon, or CUDA depending on your system).
-2. Extract the archive (e.g., to `$HOME/libtorch`).
-3. Set the `LIBTORCH` and relative Linker paths in your shell environment before running `cargo build` or the pipeline scripts:
+**Manual Libtorch Installation:**
+1. Download [LibTorch](https://pytorch.org/) (match your system: CPU, MPS, or CUDA).
+2. Extract to a known path (e.g., `$HOME/libtorch`).
+3. Set your environment variables:
    ```bash
    export LIBTORCH=$HOME/libtorch
-   export DYLD_LIBRARY_PATH=$LIBTORCH/lib:$DYLD_LIBRARY_PATH # (macOS)
-   export LD_LIBRARY_PATH=$LIBTORCH/lib:$LD_LIBRARY_PATH   # (Linux)
+   # macOS:
+   export DYLD_LIBRARY_PATH=$LIBTORCH/lib:$DYLD_LIBRARY_PATH 
+   # Linux:
+   export LD_LIBRARY_PATH=$LIBTORCH/lib:$LD_LIBRARY_PATH
    ```
 
-## Building
+---
+
+## 🔨 Building
+
+Compile the entire workspace in release mode for optimal performance:
 
 ```bash
 cargo build --release
 ```
 
-## Usage
+---
 
-### Running on accelerated environment on IDUN using Slurm (Recommended)
-For accelerated and significantly improved processing runtime, you should try to always use Slurm on IDUN.
-The current repo will during initialization — as described above — fetch preconfigured slurm schemas made by the author, if and only if the system is detected to be running on IDUN.
-The schemas will be written to `./slurm` relative to the project root, and username injection will be run automatically to insert your NTNU username on IDUN into paths in the schema.
+## 🚀 Usage
 
-These schemas may be added to the IDUN resource queue using the `sbatch` command. For example
+### Running on IDUN using Slurm (Recommended)
+For significantly improved processing runtime, use the preconfigured Slurm schemas. These are generated during initialization and include automatic NTNU username injection.
+
+These files are installed exclusively on IDUN, and will not be present on local machines after initialization. If you are on IDUN, you should run the full pipeline with e.g.:
+
 ```bash
 sbatch ./slurm/run_pipeline.slurm
 ```
 
-For additional information on using Slurm on IDUN, see [these student-written articles](https://www.hpc.ntnu.no/idun/documentation/#:~:text=Articles) in the official NTNU [IDUN Documentation](https://www.hpc.ntnu.no/idun/documentation/).
-
-__You are of course welcome to modify your slurm schemas after installation. However, beware that rerunning `scripts/init.sh` may again overwrite your own configuration. Therefore, we recommend you to either rename your self-configured `.slurm` files, or move them to a new directory.__
+> [!WARNING]
+> Rerunning `scripts/init.sh` may overwrite your Slurm configurations. If you modify files in `./slurm/`, rename them or move them to a new directory to prevent loss.
 
 ### Running the pipeline locally
+To execute the full automated pipeline:
 ```bash
 bash scripts/run-pipeline.sh
 ```
 
 ### Single-crate execution
-__NB: It is important to note that pipeline steps are highly dependent on previous crates. The user is responsible for running pipeline steps in the appropriate order when executing crates separately.__
+> [!IMPORTANT]
+> You are responsible for executing steps in the correct order when running crates individually.
 
 ```bash
+# Example: Run subject selection
 cargo run -- select-subjects
-cargo run -- parcellate-bold --force # forcefully recompute parcellating even if precomputed
+
+# Example: Force recomputation
+cargo run -- parcellate-bold --force 
 ```
 
-Complete list of CLI commands per crate:
-| Crate                 | CLI Command        |
-|-----------------------|--------------------|
-| 00subject_selection   | select-subjects    |
-| 01fmri_parcellation   | parcellate-bold    |
-| 02fmri_segment_trials | segment-trials     |
-| 03cwt                 | cwt                |
-| 04mvmd                | mvmd               |
-| 05hilbert             | hht                |
-| 06fc                  | fc                 |
-| 07feature_extraction  | feature-extraction |
-| 08classification      | classify           |
+| Crate                    | CLI Command           |
+| :---                     | :---                  |
+| `00subject_selection`    | `select-subjects`     |
+| `01fmri_parcellation`    | `parcellate-bold`     |
+| `02fmri_segment_trials`  | `segment-trials`      |
+| `03cwt`                  | `cwt`                 |
+| `04mvmd`                 | `mvmd`                |
+| `05hilbert`              | `hht`                 |
+| `06fc`                   | `fc`                  |
+| `07feature_extraction`   | `feature-extraction`  |
+| `08classification`       | `classify`            |
 
-## Configuration
+---
 
-For local machines, copy example config if `init.sh` didn't. Set paths for platform manually.
+## ⚙️ Configuration
+
+If `init.sh` does not generate a configuration file, copy the example manually:
 
 ```bash
 cp config.toml.example config.toml
 ```
 
-Example local paths:
-- `tcp_repo_dir` = `/Users/ipeglin/data/ds005237`
-- `fmriprep_output_dir` = `/Users/ipeglin/data/fmriprep`
+**Required Local Paths:**
+* `tcp_repo_dir`: Path to your dataset (e.g., `/Users/name/data/ds005237`).
+* `fmriprep_output_dir`: Path to fMRIPrep outputs.
