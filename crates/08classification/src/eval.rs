@@ -7,6 +7,7 @@ use serde::Serialize;
 use std::fs;
 use std::path::Path;
 use tracing::info;
+use utils::bids_filename::BidsFilename;
 
 use crate::classifiers::{
     DistanceMetric, KNN, KnnConfig, accuracy, confusion_matrix_binary, sensitivity_from_cm,
@@ -134,16 +135,29 @@ pub fn eval_knn_three_way_split(
         test: SplitReport {
             n_samples: test_idx.len(),
             accuracy: test_acc,
+            sensitivity: sensitivity_from_cm(&test_cm),
+            specificity: specificity_from_cm(&test_cm),
             confusion_matrix: test_cm,
         },
         val: SplitReport {
             n_samples: val_idx.len(),
             accuracy: val_acc,
+            sensitivity: sensitivity_from_cm(&val_cm),
+            specificity: specificity_from_cm(&val_cm),
             confusion_matrix: val_cm,
         },
     };
 
-    let out_path = results_dir.join(format!("{}__{}.json", analysis, source_name));
+    let filename = BidsFilename::new()
+        .with_pair("analysis", analysis)
+        .with_pair("source", source_name.as_str())
+        .with_pair("classifier", "knn")
+        .with_pair("k", num_neighbors.to_string())
+        .with_pair("metric", metric_name.as_str())
+        .with_suffix("classification")
+        .with_extension(".json")
+        .to_filename();
+    let out_path = results_dir.join(filename);
     let json = serde_json::to_string_pretty(&report)?;
     fs::write(&out_path, json)?;
     info!(path = %out_path.display(), "wrote classification report");

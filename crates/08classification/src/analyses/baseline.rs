@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::time::Instant;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tracing::{debug, info};
 use utils::bids_subject_id::BidsSubjectId;
 use utils::config::AppConfig;

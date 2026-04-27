@@ -138,7 +138,7 @@ pub fn list_subject_h5(subject_dir: &Path) -> Result<Vec<PathBuf>> {
 // ---------------------------------------------------------------------------
 
 fn analysis_group_path(source: FeatureSource, kind: AnalysisKind) -> String {
-    format!("features/{}/{}", source.dir(), kind.dir())
+    format!("07feature_extraction/{}/{}", source.dir(), kind.dir())
 }
 
 fn leaf_group_path(source: FeatureSource, kind: AnalysisKind, leaf: &str) -> String {
