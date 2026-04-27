@@ -2,7 +2,7 @@
 # params go under their [stage] table below.
 
 # Scanning parameters
-task_sampling_rate = 1.25
+task_sampling_rate = 1.25 # Hz | 1/TR, TR=800ms
 
 tcp_annex_remote = "9cee7da3-a848-4b59-b8ff-d7848f2ad864" # Git annex remote
 
