@@ -1,6 +1,9 @@
+# Large files or locally tracked
 /target
 config.toml
 !*.example
+.claude/
+.vscode/
 
 # macOS metadata
 .DS_Store

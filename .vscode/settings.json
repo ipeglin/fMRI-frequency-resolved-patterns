@@ -1,8 +1,0 @@
-{
-  "chat.tools.terminal.autoApprove": {
-    "EOF": true,
-    "ag": true,
-    "git add": true,
-    "git commit": true
-  }
-}
