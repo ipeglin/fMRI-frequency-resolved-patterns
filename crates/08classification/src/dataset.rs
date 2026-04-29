@@ -293,10 +293,15 @@ where
             for leaf in list_analysis_leaves(&file, source, kind) {
                 match read_per_roi(&file, source, kind, &leaf) {
                     Ok(rows) => {
-                        for row in rows {
+                        for (i, row) in rows.into_iter().enumerate() {
                             xs.push(row);
                             ys.push(label);
-                            groups.push(subject.clone());
+                            let mut g = subject.clone();
+                            if !leaf.is_empty() {
+                                g.push_str(&format!("_{}", leaf));
+                            }
+                            g.push_str(&format!("_roi{:03}", i));
+                            groups.push(g);
                         }
                     }
                     Err(e) => {
@@ -354,10 +359,12 @@ where
                     .entry(leaf.clone())
                     .or_insert_with(|| (Vec::new(), Vec::new(), Vec::new()));
                 if let Ok(rows) = read_per_roi(&file, source, kind, &leaf) {
-                    for row in rows {
+                    for (i, row) in rows.into_iter().enumerate() {
                         entry.0.push(row);
                         entry.1.push(label);
-                        entry.2.push(subject.clone());
+                        let mut g = subject.clone();
+                        g.push_str(&format!("_roi{:03}", i));
+                        entry.2.push(g);
                     }
                 }
             }

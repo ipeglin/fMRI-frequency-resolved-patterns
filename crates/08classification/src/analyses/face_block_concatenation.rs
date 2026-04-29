@@ -40,7 +40,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     labels.retain(|k, _| subject_ids.contains(k));
 
     for source in [FeatureSource::Cwt, FeatureSource::Hht] {
-        let (xs, ys, _) = build_per_roi_dataset(
+        let (xs, ys, groups) = build_per_roi_dataset(
             &cfg.consolidated_data_dir,
             &subject_ids,
             &labels,
@@ -60,11 +60,12 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         eval_knn_three_way_split(
             &xs,
             &ys,
+            &groups,
             cfg.classification.knn_num_neighbors,
             metric,
             "task_concat",
             source,
-            &cfg.classification_results_dir,
+            &cfg.resolved_classification_results_dir(),
         )?;
     }
 

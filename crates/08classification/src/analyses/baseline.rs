@@ -43,7 +43,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     info!(count = labels.len(), "valid subject labels loaded");
 
     for source in [FeatureSource::Cwt, FeatureSource::Hht] {
-        let (xs, ys, _groups) = build_per_roi_dataset(
+        let (xs, ys, groups) = build_per_roi_dataset(
             &cfg.consolidated_data_dir,
             &subject_ids,
             &labels,
@@ -63,11 +63,12 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         eval_knn_three_way_split(
             &xs,
             &ys,
+            &groups,
             cfg.classification.knn_num_neighbors,
             metric,
             "baseline_chunked",
             source,
-            &cfg.classification_results_dir,
+            &cfg.resolved_classification_results_dir(),
         )?;
     }
 

@@ -29,6 +29,13 @@ struct SplitReport {
 }
 
 #[derive(Debug, Serialize)]
+struct SplitManifest {
+    train: Vec<String>,
+    test: Vec<String>,
+    val: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
 struct ClassificationReport {
     analysis: String,
     source: String,
@@ -40,6 +47,7 @@ struct ClassificationReport {
     n_train: usize,
     test: SplitReport,
     val: SplitReport,
+    split_manifest: SplitManifest,
 }
 
 fn to_f64(rows: &[Vec<f32>]) -> Vec<Vec<f64>> {
@@ -54,11 +62,22 @@ fn to_f32(rows: &[Vec<f64>]) -> Vec<Vec<f32>> {
         .collect()
 }
 
+fn sorted_unique_subjects(indices: &[usize], groups: &[String]) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    for &i in indices {
+        seen.insert(groups[i].clone());
+    }
+    seen.into_iter().collect()
+}
+
 /// Stratified row-wise split, train-fit z-score, K-NN with the supplied
 /// distance metric. Logs results tagged with `analysis` and `source`.
+/// `groups` is the subject ID for each row (same length as `xs`/`ys`); used
+/// to record which subjects landed in each split for reproducibility checks.
 pub fn eval_knn_three_way_split(
     xs: &[Vec<f32>],
     ys: &[Label],
+    groups: &[String],
     num_neighbors: usize,
     metric: DistanceMetric,
     analysis: &str,
@@ -146,18 +165,34 @@ pub fn eval_knn_three_way_split(
             specificity: specificity_from_cm(&val_cm),
             confusion_matrix: val_cm,
         },
+        split_manifest: SplitManifest {
+            train: sorted_unique_subjects(&train_idx, groups),
+            test: sorted_unique_subjects(&test_idx, groups),
+            val: sorted_unique_subjects(&val_idx, groups),
+        },
     };
 
-    let filename = BidsFilename::new()
-        .with_pair("analysis", analysis)
-        .with_pair("source", source_name.as_str())
-        .with_pair("classifier", "knn")
-        .with_pair("k", num_neighbors.to_string())
-        .with_pair("metric", metric_name.as_str())
-        .with_suffix("classification")
-        .with_extension(".json")
-        .to_filename();
-    let out_path = results_dir.join(filename);
+    let mut run_counter = 0;
+    let mut out_path;
+    loop {
+        let filename = BidsFilename::new()
+            .with_pair("analysis", analysis)
+            .with_pair("source", source_name.as_str())
+            .with_pair("classifier", "knn")
+            .with_pair("k", num_neighbors.to_string())
+            .with_pair("metric", metric_name.as_str())
+            .with_pair("run", &format!("{:02}", run_counter))
+            .with_suffix("classification")
+            .with_extension(".json")
+            .to_filename();
+
+        out_path = results_dir.join(filename);
+        if !out_path.exists() {
+            break;
+        }
+        run_counter += 1;
+    }
+
     let json = serde_json::to_string_pretty(&report)?;
     fs::write(&out_path, json)?;
     info!(path = %out_path.display(), "wrote classification report");
