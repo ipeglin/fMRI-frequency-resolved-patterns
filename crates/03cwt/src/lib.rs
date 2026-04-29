@@ -167,61 +167,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                 let cwt_group = open_or_create_group(&h5_file, "03cwt", false)
                     .context("failed to open/create group /03cwt")?;
 
-                ////////////////////
-                // Full run — raw //
-                ////////////////////
-
-                // let wb_raw_done = !cfg.force && cwt_group.dataset("full_run_raw").is_ok();
-                // if wb_raw_done {
-                //     info!(
-                //         task_name = task_name,
-                //         "whole-signal raw scalogram already computed, skipping (use --force to recompute)"
-                //     );
-                // } else if task_name == "hammerAP" {
-                //     warn!(
-                //         task_name = task_name,
-                //         "We only compute block-wise CWT for task-based fMRI - Should yield the same results as doing full CWT and chunking later."
-                //     );
-                // } else {
-                //     let dataset = h5_file.dataset("full_run_raw")?;
-                //     let data_f32: Array2<f32> = dataset.read_2d()?;
-                //     let [n_channels, n_timepoints] = match data_f32.shape() {
-                //         &[r, c] => [r, c],
-                //         _ => anyhow::bail!(
-                //             "expected 2D timeseries, got shape {:?}",
-                //             data_f32.shape()
-                //         ),
-                //     };
-                //     let data_f64 = data_f32.mapv(|val| val as f64);
-
-                //     info!(
-                //         task_name = task_name,
-                //         n_channels = n_channels,
-                //         n_timepoints = n_timepoints,
-                //         "starting whole-signal raw scalogram"
-                //     );
-
-                //     let cwt_start = Instant::now();
-                //     let (scalogram_data, shape) = cwt_scalogram(&data_f64);
-                //     let cwt_duration_ms = cwt_start.elapsed().as_millis();
-
-                //     let write_start = Instant::now();
-                //     // let wb_group = open_or_create_group(&cwt_group, "full_run_raw", cfg.force)?;
-                //     write_dataset(&cwt_group, "full_run_raw", &scalogram_data, &shape, None)?;
-                //     let write_duration_ms = write_start.elapsed().as_millis();
-
-                //     info!(
-                //         task_name = task_name,
-                //         n_channels = n_channels,
-                //         n_timepoints = n_timepoints,
-                //         output_shape = ?shape,
-                //         cwt_duration_ms = cwt_duration_ms,
-                //         write_duration_ms = write_duration_ms,
-                //         output_file = %file_path.display(),
-                //         "whole-signal raw scalogram complete"
-                //     );
-                // }
-
                 /////////////////////////////////////
                 // Full run — Z-score standardized //
                 /////////////////////////////////////
@@ -278,9 +223,10 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     let cwt_duration_ms = cwt_start.elapsed().as_millis();
 
                     let write_start = Instant::now();
-                    // let wb_std_group =
-                    //     open_or_create_group(&cwt_std_group, "whole-band", cfg.force)?;
-                    debug!(dataset_path = "/03cwt/full_run_std", "writing output dataset");
+                    debug!(
+                        dataset_path = "/03cwt/full_run_std",
+                        "writing output dataset"
+                    );
                     write_dataset(&cwt_group, "full_run_std", &scalogram_data, &shape, None)?;
                     let write_duration_ms = write_start.elapsed().as_millis();
 
@@ -296,185 +242,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     );
                 }
 
-                ///////////////////////
-                // Block-level — raw //
-                ///////////////////////
-
-                // match h5_file.group(group_name_blocks_raw) {
-                //     Err(_) => {
-                //         debug!(
-                //             task_name = task_name,
-                //             "no blocks_raw group found, skipping raw block scalograms"
-                //         );
-                //     }
-                //     Ok(blocks_raw_group) => {
-                //         // Create or open the base CWT blocks group (/cwt/blocks)
-                //         let cwt_blocks_group =
-                //             open_or_create_group(&cwt_group, group_name_blocks_raw, cfg.force)?;
-
-                //         for trial_type in &target_trial_types {
-                //             let trial_group = match blocks_raw_group.group(trial_type) {
-                //                 Ok(g) => g,
-                //                 Err(_) => {
-                //                     debug!(
-                //                         task_name = task_name,
-                //                         trial_type = trial_type,
-                //                         "trial type group not found in blocks_raw, skipping"
-                //                     );
-                //                     continue;
-                //                 }
-                //             };
-
-                //             let block_names: Vec<String> = trial_group
-                //                 .member_names()?
-                //                 .into_iter()
-                //                 .filter(|n| n.starts_with("block_"))
-                //                 .collect();
-
-                //             if block_names.is_empty() {
-                //                 debug!(
-                //                     task_name = task_name,
-                //                     trial_type = trial_type,
-                //                     "trial type group is empty, skipping"
-                //                 );
-                //                 continue;
-                //             }
-
-                //             info!(
-                //                 task_name = task_name,
-                //                 trial_type = trial_type,
-                //                 num_blocks = block_names.len(),
-                //                 "starting raw block scalograms"
-                //             );
-
-                //             for (block_idx, block_name) in block_names.iter().enumerate() {
-                //                 // Check if output dataset already exists
-                //                 if !cfg.force && cwt_blocks_group.dataset(block_name).is_ok() {
-                //                     debug!(
-                //                         task_name = task_name,
-                //                         trial_type = trial_type,
-                //                         block = block_name,
-                //                         block_idx = block_idx,
-                //                         num_blocks = block_names.len(),
-                //                         "raw block scalogram already computed, skipping (use --force to recompute)"
-                //                     );
-                //                     continue;
-                //                 }
-
-                //                 // Read Input Dataset & Attributes
-                //                 let input_ds = trial_group.dataset(block_name)?;
-
-                //                 // Read the single dataset instead of concatenating cortical/subcortical
-                //                 let block_signal_f32: Array2<f32> = input_ds.read_2d()?;
-
-                //                 // Read metadata attributes from the input dataset
-                //                 let onset_s: f64 = input_ds.attr("onset_s")?.read_scalar()?;
-                //                 let block_end_s: f64 =
-                //                     input_ds.attr("block_end_s")?.read_scalar()?;
-
-                //                 let [block_channels, block_timepoints] = match block_signal_f32
-                //                     .shape()
-                //                 {
-                //                     &[r, c] => [r, c],
-                //                     _ => {
-                //                         error_count += 1;
-                //                         warn!(
-                //                             task_name = task_name,
-                //                             trial_type = trial_type,
-                //                             block = block_name,
-                //                             block_idx = block_idx,
-                //                             num_blocks = block_names.len(),
-                //                             reason = "unexpected_block_shape",
-                //                             shape = ?block_signal_f32.shape(),
-                //                             "skipping raw block scalogram due to unexpected signal shape"
-                //                         );
-                //                         continue;
-                //                     }
-                //                 };
-                //                 let block_signal_f64 = block_signal_f32.mapv(|val| val as f64);
-
-                //                 info!(
-                //                     task_name = task_name,
-                //                     trial_type = trial_type,
-                //                     block = block_name,
-                //                     block_idx = block_idx,
-                //                     num_blocks = block_names.len(),
-                //                     n_channels = block_channels,
-                //                     n_timepoints = block_timepoints,
-                //                     "starting raw block scalogram"
-                //                 );
-
-                //                 // Compute CWT
-                //                 let block_cwt_start = Instant::now();
-                //                 let (scalogram_data, shape) = cwt_scalogram(&block_signal_f64);
-                //                 let block_cwt_duration_ms = block_cwt_start.elapsed().as_millis();
-
-                //                 // Write Output Dataset & Attach Attributes
-                //                 let block_write_start = Instant::now();
-
-                //                 if cfg.force {
-                //                     let _ = cwt_blocks_group.unlink(block_name);
-                //                 }
-
-                //                 // Since we are writing the output directly as a dataset (not a group),
-                //                 // we bypass your custom `write_dataset` helper so we can attach attributes directly.
-                //                 let output_ds = cwt_blocks_group
-                //                     .new_dataset::<f32>() // Assuming scalogram_data is f32; change to f64 if needed
-                //                     .shape(shape.clone())
-                //                     .create(block_name.as_str())?;
-
-                //                 // Write the raw array data (assumes scalogram_data is C-contiguous standard layout)
-                //                 output_ds.write(&scalogram_data)?;
-
-                //                 // Write metadata attributes to the new CWT dataset
-                //                 let trial_type_val: VarLenUnicode = trial_type.parse()?;
-                //                 output_ds
-                //                     .new_attr::<VarLenUnicode>()
-                //                     .shape(())
-                //                     .create("trial_type")?
-                //                     .as_writer()
-                //                     .write_scalar(&trial_type_val)?;
-                //                 output_ds
-                //                     .new_attr::<f64>()
-                //                     .shape(())
-                //                     .create("onset_s")?
-                //                     .as_writer()
-                //                     .write_scalar(&onset_s)?;
-                //                 output_ds
-                //                     .new_attr::<f64>()
-                //                     .shape(())
-                //                     .create("block_end_s")?
-                //                     .as_writer()
-                //                     .write_scalar(&block_end_s)?;
-
-                //                 let block_write_duration_ms =
-                //                     block_write_start.elapsed().as_millis();
-
-                //                 info!(
-                //                     task_name = task_name,
-                //                     trial_type = trial_type,
-                //                     block = block_name,
-                //                     block_idx = block_idx,
-                //                     num_blocks = block_names.len(),
-                //                     n_channels = block_channels,
-                //                     n_timepoints = block_timepoints,
-                //                     output_shape = ?shape,
-                //                     cwt_duration_ms = block_cwt_duration_ms,
-                //                     write_duration_ms = block_write_duration_ms,
-                //                     "raw block scalogram complete"
-                //                 );
-                //             }
-
-                //             info!(
-                //                 task_name = task_name,
-                //                 trial_type = trial_type,
-                //                 num_blocks = block_names.len(),
-                //                 "finished all raw block scalograms for trial type"
-                //             );
-                //         }
-                //     }
-                // }
-
                 ///////////////////////////////////////////////////////////
                 // Block-level — standardized (blocks_standardized group) //
                 ///////////////////////////////////////////////////////////
@@ -487,8 +254,9 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     "starting CWT decomposition"
                 );
                 let segment_root = h5_file.group("02fmri_segment_trials").ok();
-                let blocks_std_group_opt =
-                    segment_root.as_ref().and_then(|g| g.group(group_name_blocks_std).ok());
+                let blocks_std_group_opt = segment_root
+                    .as_ref()
+                    .and_then(|g| g.group(group_name_blocks_std).ok());
                 match blocks_std_group_opt {
                     None => {
                         debug!(
