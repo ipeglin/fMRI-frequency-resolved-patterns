@@ -38,3 +38,13 @@ cnn_weights_path = ""
 [classification]
 knn_num_neighbors = 3
 knn_metric = "cosine" # cosine | euclidean | mahalanobis | mahalanobis_diag
+
+# Single source of truth for which atlas rows the spec-dependent stages
+# (04mvmd `_roi`, 05hilbert `_roi`, 06fc `_roi`, 07feature_extraction)
+# operate on. Cortical regions match exactly against the Yeo region label
+# (e.g. "PFCm"). Subcortical regions match by substring against the Tian
+# region label (e.g. "AMY" catches both "lAMY" and "mAMY").
+[roi_selection]
+name = "vpfc_mpfc_amy"
+cortical_regions = ["PFCv", "PFCm"]
+subcortical_regions = ["AMY"]
