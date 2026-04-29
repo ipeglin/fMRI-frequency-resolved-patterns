@@ -9,6 +9,7 @@ use utils::bids_subject_id::BidsSubjectId;
 use utils::config::AppConfig;
 use utils::frequency_bands;
 use utils::hdf5_io::{H5Attr, open_or_create, open_or_create_group, write_attrs, write_dataset};
+use utils::roi_migration::check_roi_fingerprint;
 
 use crate::algorithms::admm::ADMMConfig;
 use crate::algorithms::mvmd::{FrequencyInit, MVMD};
@@ -151,22 +152,35 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
 
     let brain_atlas =
         BrainAtlas::from_lut_files(&cfg.cortical_atlas_lut, &cfg.subcortical_atlas_lut);
-    let roi_pairs = brain_atlas.vpfc_mpfc_amy_ids();
-    let roi_row_indices: Vec<usize> = roi_pairs.iter().map(|(i, _)| *i).collect();
-    let roi_labels: Vec<String> = roi_pairs.iter().map(|(_, l)| l.clone()).collect();
-    if roi_row_indices.is_empty() {
+    let spec = &cfg.roi_selection;
+    let roi_subset_enabled = !spec.is_empty();
+    let selected = brain_atlas.selected_rois(spec);
+    let roi_row_indices: Vec<usize> = selected.iter().map(|r| r.row_index).collect();
+    let roi_labels: Vec<String> = selected.iter().map(|r| r.label.clone()).collect();
+    let roi_matched_regions: Vec<String> =
+        selected.iter().map(|r| r.matched_region.clone()).collect();
+    let roi_selection_name = spec.name.clone();
+    let roi_selection_fingerprint = spec.fingerprint();
+    if roi_subset_enabled && roi_row_indices.is_empty() {
         anyhow::bail!(
-            "no PFCv/PFCm/AMY ROIs matched in atlas — check LUT paths ({}, {})",
+            "ROI selection '{}' matched no atlas rows — check LUTs ({}, {}) and config [roi_selection]",
+            spec.name,
             cfg.cortical_atlas_lut.display(),
             cfg.subcortical_atlas_lut.display()
         );
     }
     let roi_indices_u32: Vec<u32> = roi_row_indices.iter().map(|i| *i as u32).collect();
-    info!(
-        n_target_rois = roi_row_indices.len(),
-        rois = ?roi_labels,
-        "selected target ROIs for ROI-only MVMD (vPFC + mPFC + AMY)"
-    );
+    if roi_subset_enabled {
+        info!(
+            n_target_rois = roi_row_indices.len(),
+            rois = ?roi_labels,
+            roi_selection_name = %roi_selection_name,
+            roi_selection_fingerprint = %roi_selection_fingerprint,
+            "selected ROI subset for ROI-only MVMD"
+        );
+    } else {
+        info!("no ROI selection configured — skipping ROI-only MVMD paths");
+    }
 
     info!(
         tcp_repo_dir = %cfg.tcp_repo_dir.display(),
@@ -429,6 +443,15 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             }
 
             // ROI-specific Full-run Decomposition //
+            // Skipped entirely when no ROI selection is configured; the
+            // whole-signal `full_run_raw` block above still runs.
+            if !roi_subset_enabled {
+                debug!(
+                    task_name = task_name,
+                    run = run_idx,
+                    "no ROI selection configured, skipping ROI-only full-run MVMD"
+                );
+            } else {
             let fr_roi_done = !cfg.force && mvmd_group.group(group_name_full_run_roi).is_ok();
             if fr_roi_done {
                 let fr_roi_group = mvmd_group.group(group_name_full_run_roi).with_context(|| {
@@ -436,6 +459,11 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                         "failed to open group /mvmd/{group_name_full_run_roi} for center_frequencies sync"
                     )
                 })?;
+                check_roi_fingerprint(
+                    &fr_roi_group,
+                    &roi_selection_fingerprint,
+                    &format!("/04mvmd/{group_name_full_run_roi}"),
+                )?;
                 sync_center_frequencies_attr_from_group(&fr_roi_group).with_context(|| {
                     format!(
                         "failed to sync center_frequencies attribute to /mvmd/{group_name_full_run_roi}/modes"
@@ -550,6 +578,12 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                         H5Attr::u32("num_iterations", roi_decomposition.num_iterations as u32),
                         H5Attr::u32("n_rois", roi_indices_u32.len() as u32),
                         H5Attr::string("roi_labels", roi_labels.join(",")),
+                        H5Attr::string("roi_matched_regions", roi_matched_regions.join(",")),
+                        H5Attr::string("roi_selection_name", &roi_selection_name),
+                        H5Attr::string(
+                            "roi_selection_fingerprint",
+                            &roi_selection_fingerprint,
+                        ),
                         H5Attr::string("channels", roi_decomposition.channels.join(",")),
                     ],
                 )?;
@@ -576,6 +610,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     output_file = %path.display(),
                     "computed ROI-only full-run MVMD decomposition"
                 );
+            }
             }
         }
 
@@ -848,6 +883,14 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             }
 
             // ROI-specific Block-wise Decomposition //
+            // Skipped entirely when no ROI selection is configured.
+            if !roi_subset_enabled {
+                debug!(
+                    task_name = task_name,
+                    "no ROI selection configured, skipping ROI-only block MVMD"
+                );
+                continue;
+            }
             let mvmd_blocks_roi_group = open_or_create_group(
                 &mvmd_group,
                 group_name_blocks_roi,
@@ -902,6 +945,11 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                                     "failed to open existing output group {output_block_group_path}"
                                 )
                             })?;
+                        check_roi_fingerprint(
+                            &existing_block_group,
+                            &roi_selection_fingerprint,
+                            &output_block_group_path,
+                        )?;
                         sync_center_frequencies_attr_from_group(&existing_block_group)
                             .with_context(|| {
                                 format!(
@@ -1030,6 +1078,15 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                             H5Attr::u32("n_rois", roi_indices_u32.len() as u32),
                             H5Attr::string("roi_labels", roi_labels.join(",")),
                             H5Attr::string("channels", roi_block_decomposition.channels.join(",")),
+                            H5Attr::string(
+                                "roi_matched_regions",
+                                roi_matched_regions.join(","),
+                            ),
+                            H5Attr::string("roi_selection_name", &roi_selection_name),
+                            H5Attr::string(
+                                "roi_selection_fingerprint",
+                                &roi_selection_fingerprint,
+                            ),
                         ],
                     )?;
                     write_mvmd_algorithm_attrs_if_missing(
