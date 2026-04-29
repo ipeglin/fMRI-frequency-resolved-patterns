@@ -6,3 +6,4 @@ pub mod config;
 pub mod frequency_bands;
 pub mod hdf5_io;
 pub mod polars_csv;
+pub mod roi_migration;

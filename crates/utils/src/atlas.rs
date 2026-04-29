@@ -189,36 +189,99 @@ impl BrainAtlas {
             .collect()
     }
 
-    /// Row indices for the subset of interest: vPFC (PFCv), mPFC (PFCm) cortical
-    /// plus amygdala (AMY) subcortical ROIs, across both hemispheres.
-    pub fn vpfc_mpfc_amy_indices(&self) -> Vec<usize> {
-        let mut idxs: Vec<usize> = self.concat_row_indices(|e| match &e.metadata {
-            RoiType::Cortical { region, .. } => region == "PFCv" || region == "PFCm",
-            RoiType::Subcortical { region, .. } => region.contains("AMY"),
-        });
-        idxs.sort_unstable();
-        idxs.dedup();
-        idxs
-    }
-
-    pub fn vpfc_mpfc_amy_ids(&self) -> Vec<(usize, String)> {
-        let mut pairs: Vec<(usize, String)> = self
+    /// Resolve a `RoiSelectionSpec` against this atlas. Cortical regions match
+    /// exactly (e.g. `"PFCm"`); subcortical regions match by substring (so
+    /// `"AMY"` catches both `lAMY-lh` and `mAMY-rh`). Returned rows are sorted
+    /// by `row_index` for deterministic ordering downstream.
+    pub fn selected_rois(&self, spec: &RoiSelectionSpec) -> Vec<SelectedRoi> {
+        let mut out: Vec<SelectedRoi> = self
             .entries
             .iter()
-            .filter(|e| match &e.metadata {
-                RoiType::Cortical { region, .. } => region == "PFCv" || region == "PFCm",
-                RoiType::Subcortical { region, .. } => region.contains("AMY"),
-            })
-            .map(|e| {
-                let row = match &e.metadata {
-                    RoiType::Cortical { .. } => e.index as usize,
-                    RoiType::Subcortical { .. } => self.n_cortical + e.index as usize,
-                };
-                (row, e.id.clone())
+            .filter_map(|e| match &e.metadata {
+                RoiType::Cortical { region, .. } => {
+                    if spec.cortical_regions.iter().any(|r| r == region) {
+                        Some(SelectedRoi {
+                            row_index: e.index as usize,
+                            label: e.id.clone(),
+                            matched_region: region.clone(),
+                            hemisphere: e.hemisphere,
+                            kind: "cortical",
+                        })
+                    } else {
+                        None
+                    }
+                }
+                RoiType::Subcortical { region, .. } => {
+                    if let Some(matched) = spec
+                        .subcortical_regions
+                        .iter()
+                        .find(|pat| region.contains(pat.as_str()))
+                    {
+                        Some(SelectedRoi {
+                            row_index: self.n_cortical + e.index as usize,
+                            label: e.id.clone(),
+                            matched_region: matched.clone(),
+                            hemisphere: e.hemisphere,
+                            kind: "subcortical",
+                        })
+                    } else {
+                        None
+                    }
+                }
             })
             .collect();
-        pairs.sort_by_key(|(i, _)| *i);
-        pairs
+        out.sort_by_key(|r| r.row_index);
+        out.dedup_by_key(|r| r.row_index);
+        out
+    }
+}
+
+/// Single ROI entry chosen by a `RoiSelectionSpec`. Carries the concat-row
+/// index used by `tcp_timeseries_raw` / `tcp_timeseries_standardized` (cortical
+/// rows 0..n_cortical, subcortical rows n_cortical..n_cortical+n_subcortical),
+/// along with the region name that triggered selection so downstream code can
+/// look up region origin per ROI.
+#[derive(Debug, Clone)]
+pub struct SelectedRoi {
+    pub row_index: usize,
+    pub label: String,
+    pub matched_region: String,
+    pub hemisphere: Hemisphere,
+    pub kind: &'static str,
+}
+
+/// User-facing ROI selection spec. Source of truth for which atlas rows feed
+/// the spec-dependent pipeline stages (04mvmd `_roi`, 05hilbert `_roi`,
+/// 06fc `_roi`, 07feature_extraction). Empty cortical+subcortical lists mean
+/// "no subset" — currently only relevant for future "all ROIs" mode.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct RoiSelectionSpec {
+    /// Human-readable identifier used in HDF5 attrs and output dir naming.
+    #[serde(default)]
+    pub name: String,
+    /// Exact match against `RoiType::Cortical.region` (e.g. `"PFCm"`).
+    #[serde(default)]
+    pub cortical_regions: Vec<String>,
+    /// Substring match against `RoiType::Subcortical.region` (e.g. `"AMY"`
+    /// catches `lAMY` and `mAMY`).
+    #[serde(default)]
+    pub subcortical_regions: Vec<String>,
+}
+
+impl RoiSelectionSpec {
+    pub fn is_empty(&self) -> bool {
+        self.cortical_regions.is_empty() && self.subcortical_regions.is_empty()
+    }
+
+    /// Stable string identifier used for migration checks. Mismatch between
+    /// stored fingerprint on an HDF5 group and the current config means the
+    /// data was produced under a different selection and must be regenerated.
+    pub fn fingerprint(&self) -> String {
+        let mut cort = self.cortical_regions.clone();
+        cort.sort();
+        let mut subc = self.subcortical_regions.clone();
+        subc.sort();
+        format!("{}:{}|{}", self.name, cort.join(","), subc.join(","))
     }
 }
 

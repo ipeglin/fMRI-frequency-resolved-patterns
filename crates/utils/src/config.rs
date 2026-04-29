@@ -5,6 +5,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::atlas::RoiSelectionSpec;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     // Shared IO paths (used by multiple stages)
@@ -41,6 +43,28 @@ pub struct AppConfig {
     pub feature_extraction: FeatureExtractionParams,
     #[serde(default)]
     pub classification: ClassificationParams,
+
+    /// Single source of truth for which atlas rows the spec-dependent stages
+    /// (04mvmd `_roi`, 05hilbert `_roi`, 06fc `_roi`, 07feature_extraction)
+    /// operate on. Empty selection is currently rejected by 07; reserved for
+    /// future "all ROIs" mode.
+    #[serde(default)]
+    pub roi_selection: RoiSelectionSpec,
+}
+
+impl AppConfig {
+    /// Resolved output directory for classification result JSON files. The
+    /// configured `classification_results_dir` is suffixed with the active
+    /// `roi_selection.name` so different ROI selections (e.g. `vpfc_mpfc_amy`
+    /// vs `dmn`) write to disjoint subdirectories. Falls back to the unsuffixed
+    /// directory when `roi_selection.name` is empty.
+    pub fn resolved_classification_results_dir(&self) -> PathBuf {
+        if self.roi_selection.name.is_empty() {
+            self.classification_results_dir.clone()
+        } else {
+            self.classification_results_dir.join(&self.roi_selection.name)
+        }
+    }
 }
 
 impl Default for AppConfig {
@@ -66,6 +90,7 @@ impl Default for AppConfig {
             mvmd: MvmdParams::default(),
             feature_extraction: FeatureExtractionParams::default(),
             classification: ClassificationParams::default(),
+            roi_selection: RoiSelectionSpec::default(),
         }
     }
 }
@@ -134,6 +159,13 @@ impl fmt::Display for AppConfig {
             Some(p) => writeln!(f, "  feature_extraction.cnn_weights_path: {}", p.display())?,
             None => writeln!(f, "  feature_extraction.cnn_weights_path: <random init>")?,
         }
+        writeln!(
+            f,
+            "  roi_selection: name={} cortical={:?} subcortical={:?}",
+            self.roi_selection.name,
+            self.roi_selection.cortical_regions,
+            self.roi_selection.subcortical_regions
+        )?;
         Ok(())
     }
 }
@@ -166,24 +198,6 @@ impl Default for MvmdParams {
     }
 }
 
-/// Selects which ROI subset to use when building DenseNet input images.
-///
-/// `Subset28` matches the analysis target (vPFC + mPFC + AMY, 28 ROIs across
-/// hemispheres) used in the thesis experiments. `All` uses every parcel in
-/// the concatenated cortical+subcortical layout (~121 ROIs).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RoiSet {
-    Subset28,
-    All,
-}
-
-impl Default for RoiSet {
-    fn default() -> Self {
-        Self::Subset28
-    }
-}
-
 /// How to coerce a spectrogram (height = 224 frequency bins, width = T time
 /// samples) to the DenseNet-201 expected `224×224` input.
 ///
@@ -209,8 +223,6 @@ impl Default for ImageFitMode {
 pub struct FeatureExtractionParams {
     #[serde(default)]
     pub cnn_weights_path: Option<PathBuf>,
-    #[serde(default)]
-    pub roi_set: RoiSet,
     /// Apply log1p amplitude compression to HHT spectrograms before min-max
     /// normalization. Recommended: heavy-tailed Hilbert spectra benefit from
     /// log compression to preserve granularity in low-amplitude bins.
@@ -228,7 +240,6 @@ impl Default for FeatureExtractionParams {
     fn default() -> Self {
         Self {
             cnn_weights_path: Some(PathBuf::from("cnn_model_weights/densenet201_imagenet.pt")),
-            roi_set: RoiSet::default(),
             hht_log_amp: default_hht_log_amp(),
             image_fit: ImageFitMode::default(),
         }
@@ -268,7 +279,7 @@ mod tests {
     #[test]
     fn parses_flat_shared_fields() {
         let toml = r#"
-            task_sampling_rate = "/tbsr"
+            task_sampling_rate = 1.25
             csv_output_dir = "/c"
             tcp_repo_dir = "/t"
             fmriprep_output_dir = "/f"
@@ -280,6 +291,7 @@ mod tests {
             cortical_atlas_lut = "/cal"
             subcortical_atlas_lut = "/scal"
             data_splitting_output_dir = "/ds"
+            classification_results_dir = "/cr"
             tcp_annex_remote = "uuid"
         "#;
         let cfg: AppConfig = toml::from_str(toml).unwrap();
@@ -292,7 +304,7 @@ mod tests {
     #[test]
     fn parses_stage_params() {
         let toml = r#"
-            task_sampling_rate = "/tbsr"
+            task_sampling_rate = 1.25
             csv_output_dir = "/c"
             tcp_repo_dir = "/t"
             fmriprep_output_dir = "/f"
@@ -304,6 +316,7 @@ mod tests {
             cortical_atlas_lut = "/cal"
             subcortical_atlas_lut = "/scal"
             data_splitting_output_dir = "/ds"
+            classification_results_dir = "/cr"
             tcp_annex_remote = "uuid"
 
             [mvmd]
@@ -315,5 +328,27 @@ mod tests {
         let cfg: AppConfig = toml::from_str(toml).unwrap();
         assert_eq!(cfg.mvmd.num_modes, 20);
         assert!(cfg.parcellation.voxelwise_zscore);
+    }
+
+    #[test]
+    fn resolved_classification_results_dir_suffixes_with_roi_name() {
+        let mut cfg = AppConfig::default();
+        cfg.classification_results_dir = PathBuf::from("/results");
+        cfg.roi_selection.name = "vpfc_mpfc_amy".to_string();
+        assert_eq!(
+            cfg.resolved_classification_results_dir(),
+            PathBuf::from("/results/vpfc_mpfc_amy")
+        );
+    }
+
+    #[test]
+    fn resolved_classification_results_dir_unsuffixed_when_name_empty() {
+        let mut cfg = AppConfig::default();
+        cfg.classification_results_dir = PathBuf::from("/results");
+        cfg.roi_selection.name = String::new();
+        assert_eq!(
+            cfg.resolved_classification_results_dir(),
+            PathBuf::from("/results")
+        );
     }
 }
