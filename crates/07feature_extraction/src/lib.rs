@@ -11,7 +11,7 @@ use tracing::{info, warn};
 use utils::atlas::BrainAtlas;
 use utils::bids_filename::BidsFilename;
 use utils::bids_subject_id::BidsSubjectId;
-use utils::config::{AppConfig, RoiSet};
+use utils::config::AppConfig;
 
 pub use feature_extractor::FeatureExtractor;
 pub use strategies::{AnalysisCtx, FeatureSrc};
@@ -27,7 +27,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     info!(
         consolidated_data_dir = %cfg.consolidated_data_dir.display(),
         force = cfg.force,
-        roi_set = ?cfg.feature_extraction.roi_set,
+        roi_selection_name = %cfg.roi_selection.name,
         image_fit = ?cfg.feature_extraction.image_fit,
         hht_log_amp = cfg.feature_extraction.hht_log_amp,
         "starting CNN feature extraction pipeline"
@@ -40,38 +40,43 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         None => info!("DenseNet-201 initialised with random weights"),
     }
 
+    if cfg.roi_selection.is_empty() {
+        anyhow::bail!(
+            "no [roi_selection] configured — feature extraction requires a non-empty \
+             cortical_regions and/or subcortical_regions list. Set [roi_selection] \
+             in config.toml (e.g. name = \"vpfc_mpfc_amy\", \
+             cortical_regions = [\"PFCv\", \"PFCm\"], subcortical_regions = [\"AMY\"])."
+        );
+    }
+
     let brain_atlas =
         BrainAtlas::from_lut_files(&cfg.cortical_atlas_lut, &cfg.subcortical_atlas_lut);
-    let (roi_indices, roi_labels) = match cfg.feature_extraction.roi_set {
-        RoiSet::Subset28 => {
-            let pairs = brain_atlas.vpfc_mpfc_amy_ids();
-            let idx: Vec<i64> = pairs.iter().map(|(i, _)| *i as i64).collect();
-            let lab: Vec<String> = pairs.iter().map(|(_, l)| l.clone()).collect();
-            (idx, lab)
-        }
-        RoiSet::All => {
-            // Atlas does not enumerate all rows; let strategies infer count from data.
-            // For "All" we generate placeholder indices later per-file. Bail early if
-            // misconfigured — the rest of the pipeline assumes Subset28 labelling.
-            anyhow::bail!(
-                "RoiSet::All not yet supported in the feature extraction pipeline; \
-                 set feature_extraction.roi_set = \"subset28\""
-            );
-        }
-    };
-    if roi_indices.is_empty() {
+    let selected = brain_atlas.selected_rois(&cfg.roi_selection);
+    if selected.is_empty() {
         anyhow::bail!(
-            "no PFCv/PFCm/AMY ROIs matched in atlas — check LUT paths ({}, {})",
+            "[roi_selection] name=\"{}\" matched zero ROIs in atlas — check LUT paths \
+             ({}, {}) and region names",
+            cfg.roi_selection.name,
             cfg.cortical_atlas_lut.display(),
             cfg.subcortical_atlas_lut.display()
         );
     }
+    let roi_indices: Vec<i64> = selected.iter().map(|r| r.row_index as i64).collect();
+    let roi_labels: Vec<String> = selected.iter().map(|r| r.label.clone()).collect();
+    let roi_matched_regions: Vec<String> =
+        selected.iter().map(|r| r.matched_region.clone()).collect();
+    let roi_selection_name = cfg.roi_selection.name.clone();
+    let roi_selection_fingerprint = cfg.roi_selection.fingerprint();
     let roi_index_tensor = Tensor::from_slice(&roi_indices);
     let labels_joined = roi_labels.join(",");
+    let matched_joined = roi_matched_regions.join(",");
     info!(
         n_target_rois = roi_indices.len(),
         rois = ?roi_labels,
-        "selected target ROIs (vPFC + mPFC + AMY)"
+        matched_regions = ?roi_matched_regions,
+        roi_selection_name = %roi_selection_name,
+        roi_selection_fingerprint = %roi_selection_fingerprint,
+        "selected target ROIs"
     );
 
     let subjects: BTreeMap<String, PathBuf> = fs::read_dir(&cfg.consolidated_data_dir)?
@@ -130,7 +135,9 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     roi_indices: &roi_indices,
                     roi_index_tensor: &roi_index_tensor,
                     roi_labels_joined: &labels_joined,
-                    roi_set: cfg.feature_extraction.roi_set,
+                    roi_matched_regions_joined: &matched_joined,
+                    roi_selection_name: &roi_selection_name,
+                    roi_selection_fingerprint: &roi_selection_fingerprint,
                     force: cfg.force,
                     subject_id: formatted_id,
                     task_name,

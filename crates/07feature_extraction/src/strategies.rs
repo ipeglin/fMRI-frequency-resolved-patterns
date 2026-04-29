@@ -22,8 +22,9 @@ use hdf5::types::TypeDescriptor;
 use std::time::Instant;
 use tch::{Kind, Tensor};
 use tracing::{debug, info};
-use utils::config::{ImageFitMode, RoiSet};
+use utils::config::ImageFitMode;
 use utils::hdf5_io::{H5Attr, open_or_create_group, write_attrs, write_dataset};
+use utils::roi_migration::check_roi_fingerprint;
 
 use crate::FeatureExtractor;
 use crate::preprocessing::{
@@ -56,11 +57,17 @@ pub struct AnalysisCtx<'a> {
     pub extractor: &'a FeatureExtractor,
     pub fit: ImageFitMode,
     pub hht_log_amp: bool,
-    /// Atlas indices for the 28-ROI subset (or all ROIs).
+    /// Concat-row atlas indices for the configured `[roi_selection]`.
     pub roi_indices: &'a [i64],
     pub roi_index_tensor: &'a Tensor,
     pub roi_labels_joined: &'a str,
-    pub roi_set: RoiSet,
+    /// Comma-joined `matched_region` per ROI, in the same order as `roi_indices`.
+    pub roi_matched_regions_joined: &'a str,
+    /// Human-readable identifier for the ROI selection (e.g. `"vpfc_mpfc_amy"`).
+    pub roi_selection_name: &'a str,
+    /// Stable fingerprint for the ROI selection. Compared against the same
+    /// attr on upstream `_roi` HHT/MVMD groups; mismatch bails the file.
+    pub roi_selection_fingerprint: &'a str,
     pub force: bool,
     pub subject_id: &'a str,
     pub task_name: &'a str,
@@ -140,27 +147,29 @@ fn load_cwt_blocks(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Vec<(String, Te
 }
 
 /// HHT restAP whole-run: `/05hht/full_run_raw_roi/hilbert_spectrum`
-/// `[28, 224, T_full]` (already ROI-selected by step 04). Falls back to
-/// `full_run_raw` when `roi_set == All`.
+/// `[n_target, 224, T_full]` (already ROI-selected upstream by 04mvmd / 05hilbert).
+/// Bails on `roi_selection_fingerprint` mismatch — the upstream `_roi` group must
+/// match the current `[roi_selection]` config.
 fn load_hht_full_run(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Option<Tensor>> {
     let hht_root = match h5.group("05hht") {
         Ok(g) => g,
         Err(_) => return Ok(None),
     };
-    let group_name = match ctx.roi_set {
-        RoiSet::Subset28 => "full_run_raw_roi",
-        RoiSet::All => "full_run_raw",
-    };
-    let sub = match hht_root.group(group_name) {
+    let sub = match hht_root.group("full_run_raw_roi") {
         Ok(g) => g,
         Err(_) => return Ok(None),
     };
+    check_roi_fingerprint(
+        &sub,
+        ctx.roi_selection_fingerprint,
+        "/05hht/full_run_raw_roi",
+    )?;
     let ds = match sub.dataset("hilbert_spectrum") {
         Ok(d) => d,
         Err(_) => return Ok(None),
     };
     let (t, [n_rows, _, _]) = read_3d_as_f32(&ds)?;
-    if matches!(ctx.roi_set, RoiSet::Subset28) && (n_rows as usize) != ctx.roi_indices.len() {
+    if (n_rows as usize) != ctx.roi_indices.len() {
         anyhow::bail!(
             "hht full_run_raw_roi rows {} != target ROI count {} — atlas mismatch",
             n_rows,
@@ -171,17 +180,14 @@ fn load_hht_full_run(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Option<Tensor
 }
 
 /// HHT hammerAP face blocks: `/05hht/blocks_raw_roi/<block>/hilbert_spectrum`
-/// (already ROI-selected). Falls back to `blocks_raw` when `roi_set == All`.
+/// (already ROI-selected upstream). Bails on `roi_selection_fingerprint`
+/// mismatch on each block group.
 fn load_hht_blocks(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Vec<(String, Tensor)>> {
     let hht_root = match h5.group("05hht") {
         Ok(g) => g,
         Err(_) => return Ok(vec![]),
     };
-    let group_name = match ctx.roi_set {
-        RoiSet::Subset28 => "blocks_raw_roi",
-        RoiSet::All => "blocks_raw",
-    };
-    let blocks = match hht_root.group(group_name) {
+    let blocks = match hht_root.group("blocks_raw_roi") {
         Ok(g) => g,
         Err(_) => return Ok(vec![]),
     };
@@ -194,12 +200,17 @@ fn load_hht_blocks(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Vec<(String, Te
     let mut out = Vec::with_capacity(names.len());
     for name in names {
         let g = blocks.group(&name)?;
+        check_roi_fingerprint(
+            &g,
+            ctx.roi_selection_fingerprint,
+            &format!("/05hht/blocks_raw_roi/{name}"),
+        )?;
         let ds = match g.dataset("hilbert_spectrum") {
             Ok(d) => d,
             Err(_) => continue,
         };
         let (t, [n_rows, _, _]) = read_3d_as_f32(&ds)?;
-        if matches!(ctx.roi_set, RoiSet::Subset28) && (n_rows as usize) != ctx.roi_indices.len() {
+        if (n_rows as usize) != ctx.roi_indices.len() {
             anyhow::bail!(
                 "hht blocks_raw_roi/{} rows {} != target ROI count {}",
                 name,
@@ -311,18 +322,13 @@ fn write_features(
             H5Attr::string("subject_id", ctx.subject_id),
             H5Attr::string("task", ctx.task_name),
             H5Attr::string("analysis", analysis),
-            H5Attr::string("roi_set", roi_set_label(ctx.roi_set)),
+            H5Attr::string("roi_selection_name", ctx.roi_selection_name),
+            H5Attr::string("roi_selection_fingerprint", ctx.roi_selection_fingerprint),
+            H5Attr::string("roi_matched_regions", ctx.roi_matched_regions_joined),
             H5Attr::string("image_fit", image_fit_label(ctx.fit)),
         ],
     )?;
     Ok(())
-}
-
-fn roi_set_label(rs: RoiSet) -> &'static str {
-    match rs {
-        RoiSet::Subset28 => "subset28",
-        RoiSet::All => "all",
-    }
 }
 
 fn image_fit_label(fit: ImageFitMode) -> &'static str {
@@ -486,7 +492,9 @@ fn write_features_resized(
             H5Attr::string("subject_id", ctx.subject_id),
             H5Attr::string("task", ctx.task_name),
             H5Attr::string("analysis", analysis),
-            H5Attr::string("roi_set", roi_set_label(ctx.roi_set)),
+            H5Attr::string("roi_selection_name", ctx.roi_selection_name),
+            H5Attr::string("roi_selection_fingerprint", ctx.roi_selection_fingerprint),
+            H5Attr::string("roi_matched_regions", ctx.roi_matched_regions_joined),
             H5Attr::string("image_fit", image_fit_label(ImageFitMode::Resize)),
         ],
     )?;
