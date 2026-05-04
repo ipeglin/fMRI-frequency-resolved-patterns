@@ -1,13 +1,13 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ndarray::{Array3, s};
 use scirs2_signal::hilbert::hilbert;
 use std::{collections::BTreeMap, fs, path::PathBuf, time::Instant};
 use tracing::{debug, info, warn};
-use utils::bids_filename::BidsFilename;
+use utils::bids_filename::{BidsFilename, filter_directory_bids_files};
 use utils::bids_subject_id::BidsSubjectId;
 use utils::config::AppConfig;
 use utils::frequency_bands;
-use utils::hdf5_io::{H5Attr, open_or_create, open_or_create_group, write_dataset_old};
+use utils::hdf5_io::{H5Attr, ensure_path, open_or_create_group, path_exists, write_dataset_old};
 use utils::roi_migration::{check_roi_fingerprint, propagate_roi_attrs};
 
 /// Number of log-spaced frequency bins for marginal spectra and the 2-D Hilbert
@@ -78,20 +78,22 @@ fn compute_hht(cfg: &AppConfig, modes_flat: &[f32], shape: &[usize]) -> Result<H
     let n_timepoints = shape[2];
     let sampling_rate = cfg.task_sampling_rate;
 
-    // Log-spaced frequency grid in Hz, matching the CWT scale grid in
-    // `crates/03cwt`. Bounds come from `frequency_bands::SLOW_BANDS` so HHT
-    // spectra share the analysed BOLD window with CWT scalograms and MVMD.
-    //
-    // Energy is binned (not interpolated): each (amp^2, ifreq) sample at time t
-    // is dropped into the nearest log-grid bin. Samples whose instantaneous
-    // frequency falls outside [f_min, f_max] are discarded — same semantics as
-    // CWT, which is only defined on the chosen scale grid.
-    let f_min = frequency_bands::f_min();
-    let f_max = frequency_bands::f_max();
-    let n_freq = TARGET_N_FREQ;
-    let log_ratio_max = (f_max / f_min).ln();
-    let freq_axis: Vec<f64> = (0..n_freq)
-        .map(|i| f_min * (f_max / f_min).powf(i as f64 / (n_freq - 1) as f64))
+    // 1. Angular boundaries for instantaneous-frequency binning (rad/s)
+    let f_min_hz = frequency_bands::f_min();
+    let f_max_hz = frequency_bands::f_max();
+    let w_min = 2.0 * std::f64::consts::PI * f_min_hz;
+    let w_max = 2.0 * std::f64::consts::PI * f_max_hz;
+    debug!(
+        f_min_hz = f_min_hz,
+        f_max_hz = f_max_hz,
+        w_min = w_min,
+        w_max = w_max,
+        "Using angular frequencies"
+    );
+
+    // Generate axis in angular space first
+    let angular_freq_axis: Vec<f64> = (0..TARGET_N_FREQ)
+        .map(|i| w_max * (w_min / w_max).powf(i as f64 / (TARGET_N_FREQ - 1) as f64))
         .collect();
 
     let modes = Array3::from_shape_vec(
@@ -99,69 +101,79 @@ fn compute_hht(cfg: &AppConfig, modes_flat: &[f32], shape: &[usize]) -> Result<H
         modes_flat.iter().map(|&v| v as f64).collect::<Vec<_>>(),
     )?;
 
-    let env_total = n_modes * n_channels * n_timepoints;
-    let marg_total = n_modes * n_channels * n_freq;
-    let full_total = n_channels * n_freq;
-    let hs_total = n_channels * n_freq * n_timepoints;
+    let mut envelope_buf = vec![0f64; n_modes * n_channels * n_timepoints];
+    let mut inst_freq_buf = vec![0f64; n_modes * n_channels * n_timepoints]; // Will hold rad/s, then converted to Hz
+    let mut marginal_buf = vec![0f64; n_modes * n_channels * TARGET_N_FREQ];
+    let mut full_buf = vec![0f64; n_channels * TARGET_N_FREQ];
+    let mut hilbert_spectrum_buf = vec![0f64; n_channels * TARGET_N_FREQ * n_timepoints];
 
-    let mut envelope_buf = vec![0f64; env_total];
-    let mut inst_freq_buf = vec![0f64; env_total];
-    let mut marginal_buf = vec![0f64; marg_total];
-    let mut full_buf = vec![0f64; full_total];
-    let mut hilbert_spectrum_buf = vec![0f64; hs_total];
+    let log_w_max = w_max.ln();
+    let log_total_w_ratio = (w_min / w_max).ln();
 
     for m in 0..n_modes {
         for c in 0..n_channels {
             let channel_signal: Vec<f64> = modes.slice(s![m, c, ..]).to_vec();
-
-            // Analytic signal via Hilbert transform
             let analytic = hilbert(&channel_signal)
                 .map_err(|e| anyhow::anyhow!("hilbert failed mode={} ch={}: {}", m, c, e))?;
 
-            // Envelope (instantaneous amplitude)
             let amp: Vec<f64> = analytic.iter().map(|z| z.norm()).collect();
             let i_omega = compute_instantaneous_angular_freq(&analytic, sampling_rate);
 
             let base = m * n_channels * n_timepoints + c * n_timepoints;
             envelope_buf[base..base + n_timepoints].copy_from_slice(&amp);
-            inst_freq_buf[base..base + n_timepoints].copy_from_slice(&ifreq);
+            inst_freq_buf[base..base + n_timepoints].copy_from_slice(&i_omega);
 
-            // Marginal Hilbert Spectrum: bin amplitude^2 by instantaneous frequency
-            // 2-D Hilbert Spectrum H(ω,t): scatter energy into [freq_bin, t] cell
-            //
-            // Bin index found by inverting the log-spaced grid construction:
-            //   f_i = f_min * (f_max/f_min)^(i/(n_freq-1))
-            //   => i = round( log(f/f_min) / log(f_max/f_min) * (n_freq-1) )
-            // Pure histogram assignment — no interpolation, no resampling.
-            let marg_base = m * n_channels * n_freq + c * n_freq;
-            let hs_base = c * n_freq * n_timepoints;
+            let marg_base = m * n_channels * TARGET_N_FREQ + c * TARGET_N_FREQ;
+            let hs_base = c * TARGET_N_FREQ * n_timepoints;
+
             for t in 0..n_timepoints {
-                let f = ifreq[t];
-                if f < f_min || f > f_max {
+                let w = i_omega[t];
+                if w < w_min || w > w_max {
+                    warn!(
+                        mode_idx = m,
+                        angular_freq = w,
+                        f_min_hz = f_min_hz,
+                        f_max_hz = f_max_hz,
+                        "Skipping mode. Instantaneous frequency out of range"
+                    );
                     continue;
                 }
-                let log_ratio = (f / f_min).ln() / log_ratio_max;
-                let bin = ((log_ratio * (n_freq - 1) as f64).round() as usize).min(n_freq - 1);
+
+                let log_ratio = (w.ln() - log_w_max) / log_total_w_ratio;
+                let bin = ((log_ratio * (TARGET_N_FREQ - 1) as f64).round() as usize)
+                    .min(TARGET_N_FREQ - 1);
+
                 let energy = amp[t] * amp[t];
                 marginal_buf[marg_base + bin] += energy;
-                // H(ω,t): sum over modes, row-major [freq_bin, timepoint]
                 hilbert_spectrum_buf[hs_base + bin * n_timepoints + t] += energy;
             }
 
-            // Accumulate into full spectrum (before normalization)
-            let full_base = c * n_freq;
-            for b in 0..n_freq {
+            let full_base = c * TARGET_N_FREQ;
+            for b in 0..TARGET_N_FREQ {
                 full_buf[full_base + b] += marginal_buf[marg_base + b];
             }
         }
     }
 
-    // Normalize full spectrum per channel so it sums to 1 (avoid div-by-zero)
+    // --- Post-Processing: Conversion to Hz ---
+
+    // Convert Axis: rad/s -> Hz
+    let freq_axis_hz: Vec<f64> = angular_freq_axis
+        .iter()
+        .map(|w| w / (2.0 * std::f64::consts::PI))
+        .collect();
+
+    // Convert Inst Freq Buffer: rad/s -> Hz
+    for val in inst_freq_buf.iter_mut() {
+        *val /= 2.0 * std::f64::consts::PI;
+    }
+
+    // Normalization (keeping as previously designed)
     for c in 0..n_channels {
-        let base = c * n_freq;
-        let sum: f64 = full_buf[base..base + n_freq].iter().sum();
+        let base = c * TARGET_N_FREQ;
+        let sum: f64 = full_buf[base..base + TARGET_N_FREQ].iter().sum();
         if sum > 0.0 {
-            for b in 0..n_freq {
+            for b in 0..TARGET_N_FREQ {
                 full_buf[base + b] /= sum;
             }
         }
@@ -172,13 +184,13 @@ fn compute_hht(cfg: &AppConfig, modes_flat: &[f32], shape: &[usize]) -> Result<H
         envelope_shape: [n_modes, n_channels, n_timepoints],
         inst_freq: inst_freq_buf,
         inst_freq_shape: [n_modes, n_channels, n_timepoints],
-        freq_axis,
+        freq_axis: freq_axis_hz,
         marginal_spectra: marginal_buf,
-        marginal_spectra_shape: [n_modes, n_channels, n_freq],
+        marginal_spectra_shape: [n_modes, n_channels, TARGET_N_FREQ],
         full_spectrum: full_buf,
-        full_spectrum_shape: [n_channels, n_freq],
+        full_spectrum_shape: [n_channels, TARGET_N_FREQ],
         hilbert_spectrum: hilbert_spectrum_buf,
-        hilbert_spectrum_shape: [n_channels, n_freq, n_timepoints],
+        hilbert_spectrum_shape: [n_channels, TARGET_N_FREQ, n_timepoints],
     })
 }
 
@@ -247,7 +259,7 @@ fn write_hht(
         &result.hilbert_spectrum_shape,
         Some(&[H5Attr::string(
             "description",
-            "2D Hilbert spectrum H(omega,t): energy summed over modes per channel [n_channels, n_freq, n_timepoints]",
+            "2D Hilbert spectrum H(f,t): energy summed over modes per channel [n_channels, n_freq, n_timepoints]",
         )]),
     )?;
 
@@ -294,7 +306,7 @@ fn process_mvmd_modes_group(
 
     if is_roi {
         let expected = cfg.roi_selection.fingerprint();
-        check_roi_fingerprint(&mvmd_sub, &expected, &format!("/04mvmd/.../{name}"))?;
+        check_roi_fingerprint(&mvmd_sub, &expected)?;
     }
 
     let hht_done = !cfg.force
@@ -306,17 +318,31 @@ fn process_mvmd_modes_group(
     if hht_done {
         if is_roi {
             let existing = hht_parent.group(name)?;
-            check_roi_fingerprint(
-                &existing,
-                &cfg.roi_selection.fingerprint(),
-                &format!("/05hht/.../{name}"),
-            )?;
+            // We only return early if the fingerprint is unchanged (is_ok).
+            // If it fails (is_err), we skip this block and continue execution.
+            if check_roi_fingerprint(&existing, &cfg.roi_selection.fingerprint()).is_ok() {
+                debug!(
+                    task_name = task_name,
+                    group = name,
+                    "HHT already computed and ROI matches, skipping"
+                );
+                return Ok(());
+            }
+        } else {
+            // If it's not a ROI task but hht_done is true, return early as before
+            debug!(
+                task_name = task_name,
+                group = name,
+                "HHT already computed, skipping"
+            );
+            return Ok(());
         }
     }
 
     let modes_ds = mvmd_sub.dataset("modes")?;
     let modes_shape = modes_ds.shape();
     let modes_flat: Vec<f32> = modes_ds.read_raw()?;
+    let center_freqs = modes_ds.attr("center_frequencies")?.read_raw()?;
 
     let [n_modes, n_channels, n_timepoints] = match modes_shape.as_slice() {
         &[a, b, c] => [a, b, c],
@@ -333,6 +359,7 @@ fn process_mvmd_modes_group(
         n_modes = n_modes,
         n_channels = n_channels,
         n_timepoints = n_timepoints,
+        n_center_frequencies = center_freqs.len(),
         "computing HHT"
     );
 
@@ -341,7 +368,7 @@ fn process_mvmd_modes_group(
     let hht_duration_ms = hht_start.elapsed().as_millis();
 
     let write_start = Instant::now();
-    let dest = open_or_create_group(hht_parent, name, cfg.force)?;
+    let dest = ensure_path(hht_parent, name, cfg.force)?;
     write_hht(cfg, &dest, &result, cfg.force)?;
     propagate_roi_indices(&mvmd_sub, &dest)?;
     if is_roi {
@@ -360,8 +387,9 @@ fn process_mvmd_modes_group(
     Ok(())
 }
 
-/// Iterate `block_*` subgroups under `mvmd_parent/name` and compute HHT for each,
-/// mirroring outputs under `hht_parent/name`.
+/// Iterate trial-type subgroups (e.g. "face") under `mvmd_parent/name`, then `block_*`
+/// subgroups within each, and compute HHT for each block, mirroring outputs under
+/// `hht_parent/name/{trial_type}/{block_name}`.
 fn process_blocks_parent(
     cfg: &AppConfig,
     mvmd_parent: &hdf5::Group,
@@ -383,41 +411,88 @@ fn process_blocks_parent(
         }
     };
 
-    let block_names: Vec<String> = mvmd_blocks
+    // MVMD writes blocks_std/{trial_type}/{block_name}, not blocks_std/{block_name}.
+    // Collect trial-type subgroups (anything that is not itself a block_* entry).
+    let trial_types: Vec<String> = mvmd_blocks
         .member_names()?
         .into_iter()
-        .filter(|n| n.starts_with("block_"))
+        .filter(|n| !n.starts_with("block_"))
         .collect();
 
-    if block_names.is_empty() {
+    if trial_types.is_empty() {
         debug!(
             task_name = task_name,
             group = name,
-            "no blocks found, skipping"
+            "no trial-type subgroups found under blocks parent, skipping"
         );
         return Ok(());
     }
 
     let hht_blocks = open_or_create_group(hht_parent, name, false)?;
+    let mut total_blocks = 0usize;
 
-    for block_name in &block_names {
-        if let Err(e) = process_mvmd_modes_group(
-            cfg,
-            &mvmd_blocks,
-            &hht_blocks,
-            block_name,
-            task_name,
-            is_roi,
-        ) {
-            *error_count += 1;
-            warn!(
+    for trial_type in &trial_types {
+        let mvmd_trial = match mvmd_blocks.group(trial_type) {
+            Ok(g) => g,
+            Err(_) => {
+                debug!(
+                    task_name = task_name,
+                    group = name,
+                    trial_type = trial_type,
+                    "trial-type subgroup missing, skipping"
+                );
+                continue;
+            }
+        };
+
+        let block_names: Vec<String> = mvmd_trial
+            .member_names()?
+            .into_iter()
+            .filter(|n| n.starts_with("block_"))
+            .collect();
+
+        if block_names.is_empty() {
+            debug!(
                 task_name = task_name,
                 group = name,
-                block = block_name,
-                error = %e,
-                "skipping block HHT due to error"
+                trial_type = trial_type,
+                "no blocks found under trial type, skipping"
             );
+            continue;
         }
+
+        let hht_trial = open_or_create_group(&hht_blocks, trial_type, false)?;
+
+        for block_name in &block_names {
+            if let Err(e) = process_mvmd_modes_group(
+                cfg,
+                &mvmd_trial,
+                &hht_trial,
+                block_name,
+                task_name,
+                is_roi,
+            ) {
+                *error_count += 1;
+                warn!(
+                    task_name = task_name,
+                    group = name,
+                    trial_type = trial_type,
+                    block = block_name,
+                    error = %e,
+                    "skipping block HHT due to error"
+                );
+            }
+        }
+
+        total_blocks += block_names.len();
+
+        info!(
+            task_name = task_name,
+            group = name,
+            trial_type = trial_type,
+            num_blocks = block_names.len(),
+            "finished block HHT decompositions for trial type"
+        );
     }
 
     info!(
@@ -471,101 +546,82 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         )
         .entered();
 
-        let available_timeseries: Vec<PathBuf> = fs::read_dir(dir)?
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|path| path.is_file())
-            .filter_map(|path| {
-                let p = path.file_name()?.to_str()?.to_string();
-                if p.contains(".h5") { Some(path) } else { None }
-            })
-            .collect();
+        let available_timeseries: Vec<BidsFilename> = filter_directory_bids_files(dir, |bids| {
+            bids.get("task") == Some("hammerAP") || bids.get("task") == Some("restAP")
+        })
+        .expect("Failed to read the directory");
 
         info!(num_files = available_timeseries.len(), "processing subject");
 
-        for file_path in &available_timeseries {
-            let file_result: anyhow::Result<()> = (|| {
-                let bids =
-                    BidsFilename::parse(match file_path.file_name().and_then(|n| n.to_str()) {
-                        Some(name) => name,
-                        None => return Ok(()),
-                    });
-                let task_name = bids.get("task").unwrap_or("unknown");
+        for file in &available_timeseries {
+            let task_name = file.get("task").unwrap_or("unknown");
 
-                let h5_file = open_or_create(file_path)?;
+            // Ensure output file exists
+            let path = file
+                .try_to_path_buf()
+                .context("BidsFilename has no path associated with it")?;
 
-                // MVMD group must exist — this step depends on step 04
-                let mvmd_group = match h5_file.group("04mvmd") {
-                    Ok(g) => g,
-                    Err(_) => {
-                        debug!(
-                            task_name = task_name,
-                            "no mvmd group found, skipping (run tcp-mvmd first)"
-                        );
-                        return Ok(());
-                    }
-                };
+            let h5_file = hdf5::File::open_rw(&path)?;
 
-                let hht_group = open_or_create_group(&h5_file, "05hht", false)?;
+            // MVMD group must exist — this step depends on step 04
+            let has_mvmd_results = path_exists(&h5_file, "04mvmd");
+            if !has_mvmd_results {
+                anyhow::bail!(
+                    "Missing 04mvmd results in file {file}. Bailing HHT for subject {subject}",
+                    subject = formatted_id,
+                    file = file,
+                )
+            }
 
-                match task_name {
-                    "restAP" => {
+            let mvmd_crate_results = h5_file.group("04mvmd")?;
+            let hht_group = ensure_path(&h5_file, "05hht", cfg.force)?;
+
+            match task_name {
+                "restAP" => {
+                    process_mvmd_modes_group(
+                        cfg,
+                        &mvmd_crate_results,
+                        &hht_group,
+                        "full_run_std",
+                        task_name,
+                        false,
+                    )?;
+                    if !cfg.roi_selection.is_empty() {
                         process_mvmd_modes_group(
                             cfg,
-                            &mvmd_group,
+                            &mvmd_crate_results,
                             &hht_group,
-                            "full_run_std",
+                            "full_run_std_roi",
                             task_name,
-                            false,
+                            true,
                         )?;
-                        if !cfg.roi_selection.is_empty() {
-                            process_mvmd_modes_group(
-                                cfg,
-                                &mvmd_group,
-                                &hht_group,
-                                "full_run_std_roi",
-                                task_name,
-                                true,
-                            )?;
-                        }
-                    }
-                    "hammerAP" => {
-                        process_blocks_parent(
-                            cfg,
-                            &mvmd_group,
-                            &hht_group,
-                            "blocks_std",
-                            task_name,
-                            &mut error_count,
-                            false,
-                        )?;
-                        if !cfg.roi_selection.is_empty() {
-                            process_blocks_parent(
-                                cfg,
-                                &mvmd_group,
-                                &hht_group,
-                                "blocks_std_roi",
-                                task_name,
-                                &mut error_count,
-                                true,
-                            )?;
-                        }
-                    }
-                    other => {
-                        debug!(task_name = other, "unrecognized task type, skipping HHT");
                     }
                 }
-
-                Ok(())
-            })();
-
-            if let Err(e) = file_result {
-                error_count += 1;
-                warn!(
-                    file = %file_path.display(),
-                    error = %e,
-                    "skipping file due to error"
-                );
+                "hammerAP" => {
+                    process_blocks_parent(
+                        cfg,
+                        &mvmd_crate_results,
+                        &hht_group,
+                        "blocks_std",
+                        task_name,
+                        &mut error_count,
+                        false,
+                    )?;
+                    if !cfg.roi_selection.is_empty() {
+                        process_blocks_parent(
+                            cfg,
+                            &mvmd_crate_results,
+                            &hht_group,
+                            "blocks_std_roi",
+                            task_name,
+                            &mut error_count,
+                            true,
+                        )?;
+                    }
+                }
+                other => {
+                    debug!(task_name = other, "unrecognized task type, skipping HHT");
+                }
             }
         }
     }
