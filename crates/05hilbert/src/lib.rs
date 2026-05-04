@@ -129,14 +129,14 @@ fn compute_hht(cfg: &AppConfig, modes_flat: &[f32], shape: &[usize]) -> Result<H
             for t in 0..n_timepoints {
                 let w = i_omega[t];
                 if w < w_min || w > w_max {
-                    warn!(
-                        mode_idx = m,
-                        angular_freq = w,
-                        f_min_hz = f_min_hz,
-                        f_max_hz = f_max_hz,
-                        "Skipping mode. Instantaneous frequency out of range"
-                    );
-                    continue;
+                    // warn!(
+                    //     mode_idx = m,
+                    //     angular_freq = w,
+                    //     f_min_hz = f_min_hz,
+                    //     f_max_hz = f_max_hz,
+                    //     "Skipping mode. Instantaneous frequency out of range"
+                    // );
+                    // continue;
                 }
 
                 let log_ratio = (w.ln() - log_w_max) / log_total_w_ratio;
