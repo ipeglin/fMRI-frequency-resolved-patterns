@@ -342,7 +342,7 @@ fn process_mvmd_modes_group(
     let modes_ds = mvmd_sub.dataset("modes")?;
     let modes_shape = modes_ds.shape();
     let modes_flat: Vec<f32> = modes_ds.read_raw()?;
-    let center_freqs = modes_ds.attr("center_frequencies")?.read_raw()?;
+    let center_freqs: Vec<f32> = modes_ds.attr("center_frequencies")?.read_raw()?;
 
     let [n_modes, n_channels, n_timepoints] = match modes_shape.as_slice() {
         &[a, b, c] => [a, b, c],
