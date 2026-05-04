@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 use hdf5::types::VarLenUnicode;
+use tracing::debug;
 
 use crate::hdf5_io::{H5Attr, write_attrs};
 
