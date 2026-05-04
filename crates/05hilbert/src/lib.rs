@@ -22,21 +22,21 @@ const TARGET_N_FREQ: usize = 224;
 /// Marginal spectra shape: [n_modes, n_channels, n_freq_bins]
 /// Full spectrum shape: [n_channels, n_freq_bins]
 struct HHTResult {
-    /// Instantaneous amplitude (envelope) per mode per channel [n_modes, n_channels, n_timepoints]
+    /// Instantaneous amplitude (envelope) [n_modes, n_channels, n_timepoints]
     envelope: Vec<f64>,
     envelope_shape: [usize; 3],
-    /// Instantaneous frequency per mode per channel [n_modes, n_channels, n_timepoints]
+    /// Instantaneous frequency (Hz) [n_modes, n_channels, n_timepoints]
     inst_freq: Vec<f64>,
     inst_freq_shape: [usize; 3],
-    /// Frequency axis for marginal/full spectra (Hz)
+    /// Frequency axis (Hz) [Size: 224], mapped from f_max to f_min
     freq_axis: Vec<f64>,
-    /// Marginal Hilbert Spectrum per mode per channel [n_modes, n_channels, n_freq_bins]
+    /// Marginal Hilbert Spectrum [n_modes, n_channels, n_freq_bins]
     marginal_spectra: Vec<f64>,
     marginal_spectra_shape: [usize; 3],
-    /// Normalized full Hilbert Spectrum (sum over modes) per channel [n_channels, n_freq_bins]
+    /// Normalized full spectrum [n_channels, n_freq_bins]
     full_spectrum: Vec<f64>,
     full_spectrum_shape: [usize; 2],
-    /// 2-D Hilbert Spectrum H(ω,t): energy summed over modes, per channel [n_channels, n_freq_bins, n_timepoints]
+    /// 2-D Hilbert Spectrum H(f,t) [n_channels, n_freq_bins, n_timepoints]
     hilbert_spectrum: Vec<f64>,
     hilbert_spectrum_shape: [usize; 3],
 }
