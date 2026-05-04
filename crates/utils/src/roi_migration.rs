@@ -66,12 +66,12 @@ pub fn propagate_roi_attrs(src: &hdf5::Location, dest: &hdf5::Location) -> Resul
 ///
 /// Used by 04mvmd / 05hilbert / 06fc / 07feature_extraction to refuse loading
 /// stale `_roi` groups produced under a different ROI selection.
-pub fn check_roi_fingerprint(loc: &hdf5::Location, expected: &str, group_path: &str) -> Result<()> {
+pub fn check_roi_fingerprint(loc: &hdf5::Location, expected: &str) -> Result<()> {
     let attr = match loc.attr("roi_selection_fingerprint") {
         Ok(a) => a,
         Err(_) => {
             return Err(anyhow!(
-                "ROI selection fingerprint missing on existing group `{group_path}` — \
+                "ROI selection fingerprint missing on existing location `{loc:?}` — \
                  produced by an older pipeline before fingerprint tracking. \
                  Rerun the producing stage with `--force` to regenerate against \
                  the current `[roi_selection]` config."
@@ -84,9 +84,16 @@ pub fn check_roi_fingerprint(loc: &hdf5::Location, expected: &str, group_path: &
         .next()
         .map(|s| s.to_string())
         .unwrap_or_default();
+    debug!(
+        hdf5_location = ?loc,
+        is_equal = stored == expected,
+        stored_at_location = stored,
+        expected_fingerprint = expected,
+        "Checking presence of expected fingerprint"
+    );
     if stored != expected {
         return Err(anyhow!(
-            "ROI selection fingerprint mismatch on `{group_path}`: stored=`{stored}`, \
+            "ROI selection fingerprint mismatch on `{loc:?}`: stored=`{stored}`, \
              expected=`{expected}`. The data was produced under a different `[roi_selection]` \
              config. Rerun the producing stage with `--force` to regenerate."
         ));
