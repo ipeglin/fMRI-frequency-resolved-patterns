@@ -171,11 +171,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                 .context("BidsFilename has no path associated with it")?;
 
             let h5_file = hdf5::File::open_rw(&path)?;
-            debug!(
-                group_path = format!("/{CWT_CRATE_GROUP}"),
-                force = cfg.force,
-                "opening output group"
-            );
 
             let fr_dataset = format!("{CWT_CRATE_GROUP}/{FULL_RUN_DATASET}");
             let already_done = !cfg.force && path_exists(&h5_file, &fr_dataset);

@@ -380,11 +380,6 @@ impl MVMD {
         let mut residual_diff = self.admm_config.tolerance + f64::EPSILON;
         let mut n: usize = 0;
 
-        info!(
-            estimated_ops_per_iter = num_modes * self.num_channels * num_fpoints * num_modes,
-            "starting MVMD iteration loop"
-        );
-
         // Pre-compute modes_sum once, then update incrementally
         let mut modes_sum: Vec<Vec<Complex64>> =
             vec![vec![Complex64::new(0.0, 0.0); num_fpoints]; self.num_channels];
@@ -478,7 +473,7 @@ impl MVMD {
 
             // Log progress at INFO level so it's visible, every 10 iterations
             if n % 100 == 0 || n == 1 {
-                info!(
+                debug!(
                     iteration = n,
                     max_iterations = self.admm_config.max_iterations,
                     residual_diff = format!("{:.6e}", residual_diff),

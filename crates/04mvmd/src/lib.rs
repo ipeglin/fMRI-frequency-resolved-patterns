@@ -139,21 +139,12 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             rois = ?roi_labels,
             roi_selection_name = %roi_selection_name,
             roi_selection_fingerprint = %roi_selection_fingerprint,
-            "selected ROI subset for ROI-only MVMD"
+            "Using ROI-stratified configuration in additional to all-channel decomposition."
         );
     } else {
         info!("no ROI selection configured — skipping ROI-only MVMD paths");
     }
 
-    info!(
-        tcp_repo_dir = %cfg.tcp_repo_dir.display(),
-        consolidated_data_dir = %cfg.consolidated_data_dir.display(),
-        num_modes = %cfg.mvmd.num_modes,
-        sampling_rate = %cfg.task_sampling_rate,
-        admm_config = ?admm_config,
-        alpha = MVMD_ALPHA,
-        "starting fMRI MVMD decomposition"
-    );
 
     let subjects: BTreeMap<String, PathBuf> = fs::read_dir(&cfg.consolidated_data_dir)?
         .filter_map(|entry_result| entry_result.ok())
@@ -203,6 +194,11 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             let task_name = rs_file.get("task").unwrap_or("unknown");
             let run_idx = rs_file.get("run").unwrap_or("unknown");
 
+            info!(
+                file = %rs_file,
+                "Processeing resting state fMRI scan"
+            );
+
             // Ensure output file exists
             let path = rs_file
                 .try_to_path_buf()
@@ -243,19 +239,20 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     "failed to sync center_frequencies attribute to /{}/{}/modes",
                     MVMD_CRATE_GROUP, FULL_RUN_GROUP
                 ))?;
-                debug!(
+                warn!(
                     task_name = task_name,
                     run = run_idx,
                     "full-run resting-state MVMD already computed, skipping (use --force to recompute)"
                 );
             } else {
                 info!(
+                    file = %rs_file,
                     task_name = task_name,
                     run = run_idx,
                     signal_type = "full_run",
                     input_dataset = "/01fmri_parcellation/full_run_std",
                     output_group = format!("/{MVMD_CRATE_GROUP}/{FULL_RUN_GROUP}"),
-                    "starting MVMD decomposition"
+                    "Commencing analysis. Full-run decomposition missing or overwritten"
                 );
                 let mvmd_start = Instant::now();
 
@@ -391,7 +388,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             // Skipped entirely when no ROI selection is configured; the
             // full-run `full_run_std` block above still runs.
             if !roi_subset_enabled {
-                debug!(
+                warn!(
                     task_name = task_name,
                     run = run_idx,
                     "no ROI selection configured, skipping ROI-only full-run MVMD"
@@ -424,21 +421,23 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                         )
                     })?;
 
-                    debug!(
-                        task_name = task_name,
-                        run = run_idx,
-                        "ROI-only full-run MVMD already computed, skipping (use --force to recompute)"
-                    );
-                } else {
-                    info!(
-                        task_name = task_name,
-                        run = run_idx,
-                        signal_type = "full_run_roi",
-                        input_dataset = "/01fmri_parcellation/full_run_std",
-                        output_group = %format!("/{MVMD_CRATE_GROUP}/{FULL_RUN_GROUP_ROI_STRATIFIED}"),
-                        n_target_rois = roi_row_indices.len(),
-                        "starting ROI-only MVMD decomposition"
-                    );
+                warn!(
+                    file = %rs_file,
+                    task_name = task_name,
+                    run = run_idx,
+                    "ROI-only full-run MVMD already computed, skipping (use --force to recompute)"
+                );
+            } else {
+                info!(
+                    file = %rs_file,
+                    task_name = task_name,
+                    run = run_idx,
+                    signal_type = "full_run_roi",
+                    input_dataset = "/01fmri_parcellation/full_run_std",
+                    output_group = %format!("/{MVMD_CRATE_GROUP}/{FULL_RUN_GROUP_ROI_STRATIFIED}"),
+                    n_target_rois = roi_row_indices.len(),
+                    "Commencing analysis. ROI-stratified decomposition missing or overwritten"
+                );
 
                     let mvmd_roi_start = Instant::now();
 
@@ -544,17 +543,18 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
 
                     let roi_write_duration_ms = roi_write_start.elapsed().as_millis();
 
-                    debug!(
-                        task_name = task_name,
-                        n_target_rois = roi_row_indices.len(),
-                        num_modes = num_modes,
-                        mvmd_iterations = roi_decomposition.num_iterations,
-                        mvmd_duration_ms = mvmd_roi_duration_ms,
-                        write_duration_ms = roi_write_duration_ms,
-                        output_file = %path.display(),
-                        "computed ROI-only full-run MVMD decomposition"
-                    );
-                }
+                let roi_write_duration_ms = roi_write_start.elapsed().as_millis();
+
+                debug!(
+                    task_name = task_name,
+                    n_target_rois = roi_row_indices.len(),
+                    num_modes = num_modes,
+                    mvmd_iterations = roi_decomposition.num_iterations,
+                    mvmd_duration_ms = mvmd_roi_duration_ms,
+                    write_duration_ms = roi_write_duration_ms,
+                    output_file = %path.display(),
+                    "computed ROI-only full-run MVMD decomposition"
+                );
             }
         }
 
@@ -562,11 +562,8 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             let task_name = task_file.get("task").unwrap_or("unknown");
 
             info!(
-                task_name = task_name,
-                signal_type = "blocks",
-                input_group = format!("/02fmri_segment_trials/{}", ALL_BLOCKS_GROUP),
-                output_group = format!("/{}/{}", MVMD_CRATE_GROUP, ALL_BLOCKS_GROUP),
-                "starting CWT decomposition"
+                file = %task_file,
+                "Processeing task-based fMRI scan"
             );
 
             let path = task_file
@@ -640,17 +637,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     let block_name_path =
                         format!("/{MVMD_CRATE_GROUP}/{ALL_BLOCKS_GROUP}/{trial_type}/{block_name}");
 
-                    info!(
-                        task_name = task_name,
-                        trial_type = trial_type,
-                        block = block_name,
-                        block_idx = block_idx,
-                        num_blocks = blocks_available.len(),
-                        signal_type = "block",
-                        input_dataset = %input_block_dataset_path,
-                        output_group = %block_name_path,
-                        "starting MVMD decomposition"
-                    );
 
                     // Check if output group already exists (/04mvmd/blocks_std/block_X/)
                     let block_already_done = !cfg.force

@@ -322,12 +322,6 @@ fn process_mvmd_modes_group(
                 &format!("/05hht/.../{name}"),
             )?;
         }
-        debug!(
-            task_name = task_name,
-            group = name,
-            "HHT already computed, skipping (use --force to recompute)"
-        );
-        return Ok(());
     }
 
     let modes_ds = mvmd_sub.dataset("modes")?;
@@ -439,8 +433,8 @@ fn process_blocks_parent(
     info!(
         task_name = task_name,
         group = name,
-        num_blocks = block_names.len(),
-        "finished block HHT decompositions"
+        total_blocks = total_blocks,
+        "finished all block HHT decompositions"
     );
 
     Ok(())
