@@ -31,6 +31,7 @@ pub enum FeatureSource {
     Ts,
     Cwt,
     Hht,
+    HhtRoi,
 }
 
 impl FeatureSource {
@@ -39,6 +40,7 @@ impl FeatureSource {
             Self::Ts => "ts",
             Self::Cwt => "cwt",
             Self::Hht => "hht",
+            Self::HhtRoi => "hht_roi",
         }
     }
 }
@@ -49,6 +51,7 @@ impl std::str::FromStr for FeatureSource {
         match s {
             "cwt" => Ok(Self::Cwt),
             "hht" => Ok(Self::Hht),
+            "hht_roi" => Ok(Self::HhtRoi),
             _ => Err(format!("unknown FeatureSource: {}", s)),
         }
     }

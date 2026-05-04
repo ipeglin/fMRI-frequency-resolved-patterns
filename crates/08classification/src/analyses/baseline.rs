@@ -42,7 +42,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     labels.retain(|k, _| subject_ids.contains(k));
     info!(count = labels.len(), "valid subject labels loaded");
 
-    for source in [FeatureSource::Ts, FeatureSource::Cwt, FeatureSource::Hht] {
+    for source in [FeatureSource::Ts, FeatureSource::Cwt, FeatureSource::Hht, FeatureSource::HhtRoi] {
         let (xs, ys, groups) = build_per_roi_dataset(
             &cfg.consolidated_data_dir,
             &subject_ids,

@@ -41,7 +41,12 @@ pub const SHUFFLE_SEED: u64 = 42;
 pub enum FeatureSrc {
     Ts,
     Cwt,
+    /// HHT from all-channel MVMD (`05hht/full_run_std`, `05hht/blocks_std`).
+    /// ROI selection applied at load time, analogous to `Cwt`.
     Hht,
+    /// HHT from ROI-stratified MVMD (`05hht/full_run_std_roi`, `05hht/blocks_std_roi`).
+    /// Already ROI-selected upstream — no index_select at load time.
+    HhtRoi,
 }
 
 impl FeatureSrc {
@@ -50,6 +55,7 @@ impl FeatureSrc {
             FeatureSrc::Ts => "ts",
             FeatureSrc::Cwt => "cwt",
             FeatureSrc::Hht => "hht",
+            FeatureSrc::HhtRoi => "hht_roi",
         }
     }
 }
@@ -77,7 +83,7 @@ pub struct AnalysisCtx<'a> {
 
 impl AnalysisCtx<'_> {
     fn log_amp_for(&self, src: FeatureSrc) -> bool {
-        matches!(src, FeatureSrc::Hht) && self.hht_log_amp
+        matches!(src, FeatureSrc::Hht | FeatureSrc::HhtRoi) && self.hht_log_amp
     }
 }
 
@@ -211,38 +217,110 @@ fn load_cwt_full_run(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Option<Tensor
     Ok(Some(full.index_select(0, ctx.roi_index_tensor)))
 }
 
-/// CWT hammerAP face blocks: `/03cwt/blocks_std/<block_name>` per block.
+/// CWT hammerAP face blocks: `/03cwt/blocks_std/{trial_type}/{block_name}` per block.
 /// Returns ordered list of (name, ROI-selected tensor `[n_target, 224, T_block]`).
 fn load_cwt_blocks(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Vec<(String, Tensor)>> {
     let cwt_root = match h5.group("03cwt") {
         Ok(g) => g,
         Err(_) => return Ok(vec![]),
     };
-    let blocks = match cwt_root.group("blocks_std") {
+    let blocks_parent = match cwt_root.group("blocks_std") {
         Ok(g) => g,
         Err(_) => return Ok(vec![]),
     };
-    let mut names: Vec<String> = blocks
+    // CWT writes blocks_std/{trial_type}/{block_name}, not blocks_std/{block_name}.
+    let trial_types: Vec<String> = blocks_parent
         .member_names()?
         .into_iter()
-        .filter(|n| n.starts_with("block_"))
+        .filter(|n| !n.starts_with("block_"))
         .collect();
-    names.sort();
-    let mut out = Vec::with_capacity(names.len());
-    for name in names {
-        let ds = blocks.dataset(&name)?;
-        let (block, [n_all, _, _]) = read_3d_as_f32(&ds)?;
-        validate_roi_range(ctx.roi_indices, n_all, "cwt blocks_std")?;
-        out.push((name, block.index_select(0, ctx.roi_index_tensor)));
+    let mut out = Vec::new();
+    for trial_type in &trial_types {
+        let trial_group = match blocks_parent.group(trial_type) {
+            Ok(g) => g,
+            Err(_) => continue,
+        };
+        let mut names: Vec<String> = trial_group
+            .member_names()?
+            .into_iter()
+            .filter(|n| n.starts_with("block_"))
+            .collect();
+        names.sort();
+        for name in names {
+            let ds = trial_group.dataset(&name)?;
+            let (block, [n_all, _, _]) = read_3d_as_f32(&ds)?;
+            validate_roi_range(ctx.roi_indices, n_all, "cwt blocks_std")?;
+            out.push((name, block.index_select(0, ctx.roi_index_tensor)));
+        }
     }
     Ok(out)
 }
 
-/// HHT restAP whole-run: `/05hht/full_run_std_roi/hilbert_spectrum`
-/// `[n_target, 224, T_full]` (already ROI-selected upstream by 04mvmd / 05hilbert).
-/// Bails on `roi_selection_fingerprint` mismatch — the upstream `_roi` group must
-/// match the current `[roi_selection]` config.
+/// HHT restAP whole-run from all-channel MVMD: `/05hht/full_run_std/hilbert_spectrum`
+/// `[n_all, 224, T_full]`. ROI selection applied at load time.
 fn load_hht_full_run(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Option<Tensor>> {
+    let hht_root = match h5.group("05hht") {
+        Ok(g) => g,
+        Err(_) => return Ok(None),
+    };
+    let sub = match hht_root.group("full_run_std") {
+        Ok(g) => g,
+        Err(_) => return Ok(None),
+    };
+    let ds = match sub.dataset("hilbert_spectrum") {
+        Ok(d) => d,
+        Err(_) => return Ok(None),
+    };
+    let (t, [n_all, _, _]) = read_3d_as_f32(&ds)?;
+    validate_roi_range(ctx.roi_indices, n_all, "hht full_run_std")?;
+    Ok(Some(t.index_select(0, ctx.roi_index_tensor)))
+}
+
+/// HHT hammerAP face blocks from all-channel MVMD: `/05hht/blocks_std/{trial_type}/{block_name}/hilbert_spectrum`
+/// `[n_all, 224, T_block]`. ROI selection applied at load time.
+fn load_hht_blocks(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Vec<(String, Tensor)>> {
+    let hht_root = match h5.group("05hht") {
+        Ok(g) => g,
+        Err(_) => return Ok(vec![]),
+    };
+    let blocks_parent = match hht_root.group("blocks_std") {
+        Ok(g) => g,
+        Err(_) => return Ok(vec![]),
+    };
+    let trial_types: Vec<String> = blocks_parent
+        .member_names()?
+        .into_iter()
+        .filter(|n| !n.starts_with("block_"))
+        .collect();
+    let mut out = Vec::new();
+    for trial_type in &trial_types {
+        let trial_group = match blocks_parent.group(trial_type) {
+            Ok(g) => g,
+            Err(_) => continue,
+        };
+        let mut names: Vec<String> = trial_group
+            .member_names()?
+            .into_iter()
+            .filter(|n| n.starts_with("block_"))
+            .collect();
+        names.sort();
+        for name in names {
+            let g = trial_group.group(&name)?;
+            let ds = match g.dataset("hilbert_spectrum") {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let (t, [n_all, _, _]) = read_3d_as_f32(&ds)?;
+            validate_roi_range(ctx.roi_indices, n_all, "hht blocks_std")?;
+            out.push((name, t.index_select(0, ctx.roi_index_tensor)));
+        }
+    }
+    Ok(out)
+}
+
+/// HHT restAP whole-run from ROI-stratified MVMD: `/05hht/full_run_std_roi/hilbert_spectrum`
+/// `[n_target, 224, T_full]` (already ROI-selected upstream). Bails on fingerprint mismatch.
+fn load_hht_roi_full_run(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Option<Tensor>> {
     let hht_root = match h5.group("05hht") {
         Ok(g) => g,
         Err(_) => return Ok(None),
@@ -251,11 +329,7 @@ fn load_hht_full_run(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Option<Tensor
         Ok(g) => g,
         Err(_) => return Ok(None),
     };
-    check_roi_fingerprint(
-        &sub,
-        ctx.roi_selection_fingerprint,
-        "/05hht/full_run_std_roi",
-    )?;
+    check_roi_fingerprint(&sub, ctx.roi_selection_fingerprint)?;
     let ds = match sub.dataset("hilbert_spectrum") {
         Ok(d) => d,
         Err(_) => return Ok(None),
@@ -263,7 +337,7 @@ fn load_hht_full_run(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Option<Tensor
     let (t, [n_rows, _, _]) = read_3d_as_f32(&ds)?;
     if (n_rows as usize) != ctx.roi_indices.len() {
         anyhow::bail!(
-            "hht full_run_std_roi rows {} != target ROI count {} — atlas mismatch",
+            "hht_roi full_run_std_roi rows {} != target ROI count {} — atlas mismatch",
             n_rows,
             ctx.roi_indices.len()
         );
@@ -271,46 +345,54 @@ fn load_hht_full_run(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Option<Tensor
     Ok(Some(t))
 }
 
-/// HHT hammerAP face blocks: `/05hht/blocks_std_roi/<block>/hilbert_spectrum`
-/// (already ROI-selected upstream). Bails on `roi_selection_fingerprint`
-/// mismatch on each block group.
-fn load_hht_blocks(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Vec<(String, Tensor)>> {
+/// HHT hammerAP face blocks from ROI-stratified MVMD:
+/// `/05hht/blocks_std_roi/{trial_type}/{block_name}/hilbert_spectrum`
+/// (already ROI-selected upstream). Bails on fingerprint mismatch per block.
+fn load_hht_roi_blocks(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Vec<(String, Tensor)>> {
     let hht_root = match h5.group("05hht") {
         Ok(g) => g,
         Err(_) => return Ok(vec![]),
     };
-    let blocks = match hht_root.group("blocks_std_roi") {
+    let blocks_parent = match hht_root.group("blocks_std_roi") {
         Ok(g) => g,
         Err(_) => return Ok(vec![]),
     };
-    let mut names: Vec<String> = blocks
+    let trial_types: Vec<String> = blocks_parent
         .member_names()?
         .into_iter()
-        .filter(|n| n.starts_with("block_"))
+        .filter(|n| !n.starts_with("block_"))
         .collect();
-    names.sort();
-    let mut out = Vec::with_capacity(names.len());
-    for name in names {
-        let g = blocks.group(&name)?;
-        check_roi_fingerprint(
-            &g,
-            ctx.roi_selection_fingerprint,
-            &format!("/05hht/blocks_std_roi/{name}"),
-        )?;
-        let ds = match g.dataset("hilbert_spectrum") {
-            Ok(d) => d,
+    let mut out = Vec::new();
+    for trial_type in &trial_types {
+        let trial_group = match blocks_parent.group(trial_type) {
+            Ok(g) => g,
             Err(_) => continue,
         };
-        let (t, [n_rows, _, _]) = read_3d_as_f32(&ds)?;
-        if (n_rows as usize) != ctx.roi_indices.len() {
-            anyhow::bail!(
-                "hht blocks_std_roi/{} rows {} != target ROI count {}",
-                name,
-                n_rows,
-                ctx.roi_indices.len()
-            );
+        let mut names: Vec<String> = trial_group
+            .member_names()?
+            .into_iter()
+            .filter(|n| n.starts_with("block_"))
+            .collect();
+        names.sort();
+        for name in names {
+            let g = trial_group.group(&name)?;
+            check_roi_fingerprint(&g, ctx.roi_selection_fingerprint)?;
+            let ds = match g.dataset("hilbert_spectrum") {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let (t, [n_rows, _, _]) = read_3d_as_f32(&ds)?;
+            if (n_rows as usize) != ctx.roi_indices.len() {
+                anyhow::bail!(
+                    "hht_roi blocks_std_roi/{}/{} rows {} != target ROI count {}",
+                    trial_type,
+                    name,
+                    n_rows,
+                    ctx.roi_indices.len()
+                );
+            }
+            out.push((name, t));
         }
-        out.push((name, t));
     }
     Ok(out)
 }
@@ -811,7 +893,14 @@ pub fn run_for_file(ctx: &AnalysisCtx, h5: &hdf5::File) -> Result<()> {
                 run_baseline_averaged(ctx, &features_root, FeatureSrc::Hht, &spec)?;
                 run_baseline_resized(ctx, &features_root, FeatureSrc::Hht, &spec)?;
             } else {
-                debug!("restAP: no HHT full_run, skipping HHT analyses");
+                debug!("restAP: no HHT full_run_std, skipping HHT analyses");
+            }
+            if let Some(spec) = load_hht_roi_full_run(h5, ctx)? {
+                run_baseline_chunked(ctx, &features_root, FeatureSrc::HhtRoi, &spec)?;
+                run_baseline_averaged(ctx, &features_root, FeatureSrc::HhtRoi, &spec)?;
+                run_baseline_resized(ctx, &features_root, FeatureSrc::HhtRoi, &spec)?;
+            } else {
+                debug!("restAP: no HHT full_run_std_roi, skipping HHT-ROI analyses");
             }
             if let Some(spec) = load_resting_state_full_run(h5, ctx)? {
                 run_baseline_chunked(ctx, &features_root, FeatureSrc::Ts, &spec)?;
@@ -839,7 +928,17 @@ pub fn run_for_file(ctx: &AnalysisCtx, h5: &hdf5::File) -> Result<()> {
                 run_task_per_block_resized(ctx, &features_root, FeatureSrc::Hht, &hht_blocks)?;
                 run_task_averaged_resized(ctx, &features_root, FeatureSrc::Hht, &hht_blocks)?;
             } else {
-                debug!("hammerAP: no HHT blocks, skipping HHT analyses");
+                debug!("hammerAP: no HHT blocks_std, skipping HHT analyses");
+            }
+            let hht_roi_blocks = load_hht_roi_blocks(h5, ctx)?;
+            if !hht_roi_blocks.is_empty() {
+                run_task_concat(ctx, &features_root, FeatureSrc::HhtRoi, &hht_roi_blocks)?;
+                run_task_per_block(ctx, &features_root, FeatureSrc::HhtRoi, &hht_roi_blocks)?;
+                run_task_averaged(ctx, &features_root, FeatureSrc::HhtRoi, &hht_roi_blocks)?;
+                run_task_per_block_resized(ctx, &features_root, FeatureSrc::HhtRoi, &hht_roi_blocks)?;
+                run_task_averaged_resized(ctx, &features_root, FeatureSrc::HhtRoi, &hht_roi_blocks)?;
+            } else {
+                debug!("hammerAP: no HHT blocks_std_roi, skipping HHT-ROI analyses");
             }
         }
         other => {
