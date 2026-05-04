@@ -145,7 +145,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         info!("no ROI selection configured — skipping ROI-only MVMD paths");
     }
 
-
     let subjects: BTreeMap<String, PathBuf> = fs::read_dir(&cfg.consolidated_data_dir)?
         .filter_map(|entry_result| entry_result.ok())
         .filter_map(|entry| {
@@ -654,7 +653,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     let block_name_path =
                         format!("/{MVMD_CRATE_GROUP}/{ALL_BLOCKS_GROUP}/{trial_type}/{block_name}");
 
-
                     // Check if output group already exists (/04mvmd/blocks_std/block_X/)
                     let block_already_done = !cfg.force
                         && path_exists(&h5_file, format!("{}/modes", block_name_path).as_str());
@@ -860,7 +858,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     let block_name_path = format!(
                         "/{MVMD_CRATE_GROUP}/{ALL_BLOCKS_GROUP_ROI_STRATIFIED}/{trial_type}/{block_name}"
                     );
-
 
                     let roi_block_fingerprint_ok = h5_file
                         .group(&block_name_path)
