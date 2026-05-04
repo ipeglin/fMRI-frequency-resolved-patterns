@@ -281,7 +281,7 @@ impl MVMD {
             num_tpoints,
             alpha,
             init: FrequencyInit::default(),
-            sampling_rate: 1.0,
+            sampling_rate: 1.25,
             admm_config: ADMMConfig::default(),
         }
     }
