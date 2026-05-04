@@ -23,6 +23,7 @@ use std::time::Instant;
 use tch::{Kind, Tensor};
 use tracing::{debug, info};
 use utils::config::ImageFitMode;
+use utils::frequency_bands;
 use utils::hdf5_io::{H5Attr, open_or_create_group, write_attrs, write_dataset_old};
 use utils::roi_migration::check_roi_fingerprint;
 
@@ -256,8 +257,54 @@ fn load_cwt_blocks(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Vec<(String, Te
     Ok(out)
 }
 
-/// HHT restAP whole-run from all-channel MVMD: `/05hht/full_run_std/hilbert_spectrum`
-/// `[n_all, 224, T_full]`. ROI selection applied at load time.
+/// Build a scatter-style Hilbert spectrum image from instantaneous frequency and envelope.
+///
+/// Inputs `inst_freq` and `envelope` are both `[n_modes, n_ch, n_t]` f32 tensors.
+/// Returns `[n_ch, 224, n_t]` f32 — same shape as the pre-computed `hilbert_spectrum`
+/// dataset, so all downstream strategy code is unchanged.
+///
+/// Bin mapping matches 05hilbert: bin 0 = f_max (high), bin 223 = f_min (low).
+/// Samples outside [f_min, f_max) are dropped. Multiple modes at the same
+/// (channel, bin, time) are resolved by taking the element-wise maximum envelope.
+fn scatter_hht_spectrum(inst_freq: &Tensor, envelope: &Tensor) -> Tensor {
+    let f_min_hz = frequency_bands::f_min();
+    let f_max_hz = frequency_bands::f_max();
+    let log_f_max = f_max_hz.ln();
+    let log_ratio_denom = (f_min_hz / f_max_hz).ln();
+
+    let sizes = inst_freq.size();
+    let (n_modes, n_ch, n_t) = (sizes[0], sizes[1], sizes[2]);
+
+    let mut out = Tensor::zeros([n_ch, 224, n_t], (Kind::Float, inst_freq.device()));
+
+    for m in 0..n_modes {
+        let if_m = inst_freq.select(0, m); // [n_ch, n_t]
+        let env_m = envelope.select(0, m); // [n_ch, n_t]
+
+        let in_band = if_m
+            .ge(f_min_hz)
+            .logical_and(&if_m.lt(f_max_hz));
+
+        let if_clamped = if_m.clamp(1e-10, f_max_hz);
+        let log_ratio = (if_clamped.log() - log_f_max) / log_ratio_denom;
+        let bins = (log_ratio * 223.0)
+            .round()
+            .clamp(0.0, 223.0)
+            .to_kind(Kind::Int64); // [n_ch, n_t]
+
+        let env_masked = env_m * in_band.to_kind(Kind::Float);
+
+        let mut mode_scatter = Tensor::zeros([n_ch, 224, n_t], (Kind::Float, inst_freq.device()));
+        let _ = mode_scatter.scatter_(1, &bins.unsqueeze(1), &env_masked.unsqueeze(1));
+
+        out = out.maximum(&mode_scatter);
+    }
+
+    out
+}
+
+/// HHT restAP whole-run from all-channel MVMD: `/05hht/full_run_std/{instantaneous_frequency,envelope}`
+/// Scatter-bins IF+envelope into `[n_all, 224, T_full]`, then ROI-selects.
 fn load_hht_full_run(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Option<Tensor>> {
     let hht_root = match h5.group("05hht") {
         Ok(g) => g,
@@ -267,17 +314,23 @@ fn load_hht_full_run(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Option<Tensor
         Ok(g) => g,
         Err(_) => return Ok(None),
     };
-    let ds = match sub.dataset("hilbert_spectrum") {
+    let ds_if = match sub.dataset("instantaneous_frequency") {
         Ok(d) => d,
         Err(_) => return Ok(None),
     };
-    let (t, [n_all, _, _]) = read_3d_as_f32(&ds)?;
-    validate_roi_range(ctx.roi_indices, n_all, "hht full_run_std")?;
-    Ok(Some(t.index_select(0, ctx.roi_index_tensor)))
+    let ds_env = match sub.dataset("envelope") {
+        Ok(d) => d,
+        Err(_) => return Ok(None),
+    };
+    let (inst_freq, [_, n_ch, _]) = read_3d_as_f32(&ds_if)?; // [n_modes, n_ch, n_t]
+    let (envelope, _) = read_3d_as_f32(&ds_env)?;
+    validate_roi_range(ctx.roi_indices, n_ch, "hht full_run_std")?;
+    let spec = scatter_hht_spectrum(&inst_freq, &envelope); // [n_ch, 224, n_t]
+    Ok(Some(spec.index_select(0, ctx.roi_index_tensor)))
 }
 
-/// HHT hammerAP face blocks from all-channel MVMD: `/05hht/blocks_std/{trial_type}/{block_name}/hilbert_spectrum`
-/// `[n_all, 224, T_block]`. ROI selection applied at load time.
+/// HHT hammerAP face blocks from all-channel MVMD: `/05hht/blocks_std/{trial_type}/{block_name}/{if,env}`
+/// Scatter-bins IF+envelope per block into `[n_all, 224, T_block]`, then ROI-selects.
 fn load_hht_blocks(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Vec<(String, Tensor)>> {
     let hht_root = match h5.group("05hht") {
         Ok(g) => g,
@@ -306,20 +359,26 @@ fn load_hht_blocks(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Vec<(String, Te
         names.sort();
         for name in names {
             let g = trial_group.group(&name)?;
-            let ds = match g.dataset("hilbert_spectrum") {
+            let ds_if = match g.dataset("instantaneous_frequency") {
                 Ok(d) => d,
                 Err(_) => continue,
             };
-            let (t, [n_all, _, _]) = read_3d_as_f32(&ds)?;
-            validate_roi_range(ctx.roi_indices, n_all, "hht blocks_std")?;
-            out.push((name, t.index_select(0, ctx.roi_index_tensor)));
+            let ds_env = match g.dataset("envelope") {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let (inst_freq, [_, n_ch, _]) = read_3d_as_f32(&ds_if)?;
+            let (envelope, _) = read_3d_as_f32(&ds_env)?;
+            validate_roi_range(ctx.roi_indices, n_ch, "hht blocks_std")?;
+            let spec = scatter_hht_spectrum(&inst_freq, &envelope);
+            out.push((name, spec.index_select(0, ctx.roi_index_tensor)));
         }
     }
     Ok(out)
 }
 
-/// HHT restAP whole-run from ROI-stratified MVMD: `/05hht/full_run_std_roi/hilbert_spectrum`
-/// `[n_target, 224, T_full]` (already ROI-selected upstream). Bails on fingerprint mismatch.
+/// HHT restAP whole-run from ROI-stratified MVMD: `/05hht/full_run_std_roi/{if,env}`
+/// Already ROI-selected upstream; scatter-bins IF+envelope into `[n_target, 224, T_full]`.
 fn load_hht_roi_full_run(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Option<Tensor>> {
     let hht_root = match h5.group("05hht") {
         Ok(g) => g,
@@ -330,11 +389,16 @@ fn load_hht_roi_full_run(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Option<Te
         Err(_) => return Ok(None),
     };
     check_roi_fingerprint(&sub, ctx.roi_selection_fingerprint)?;
-    let ds = match sub.dataset("hilbert_spectrum") {
+    let ds_if = match sub.dataset("instantaneous_frequency") {
         Ok(d) => d,
         Err(_) => return Ok(None),
     };
-    let (t, [n_rows, _, _]) = read_3d_as_f32(&ds)?;
+    let ds_env = match sub.dataset("envelope") {
+        Ok(d) => d,
+        Err(_) => return Ok(None),
+    };
+    let (inst_freq, [_, n_rows, _]) = read_3d_as_f32(&ds_if)?; // [n_modes, n_roi, n_t]
+    let (envelope, _) = read_3d_as_f32(&ds_env)?;
     if (n_rows as usize) != ctx.roi_indices.len() {
         anyhow::bail!(
             "hht_roi full_run_std_roi rows {} != target ROI count {} — atlas mismatch",
@@ -342,12 +406,12 @@ fn load_hht_roi_full_run(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Option<Te
             ctx.roi_indices.len()
         );
     }
-    Ok(Some(t))
+    Ok(Some(scatter_hht_spectrum(&inst_freq, &envelope)))
 }
 
 /// HHT hammerAP face blocks from ROI-stratified MVMD:
-/// `/05hht/blocks_std_roi/{trial_type}/{block_name}/hilbert_spectrum`
-/// (already ROI-selected upstream). Bails on fingerprint mismatch per block.
+/// `/05hht/blocks_std_roi/{trial_type}/{block_name}/{if,env}`
+/// Already ROI-selected upstream; scatter-bins IF+envelope per block.
 fn load_hht_roi_blocks(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Vec<(String, Tensor)>> {
     let hht_root = match h5.group("05hht") {
         Ok(g) => g,
@@ -377,11 +441,16 @@ fn load_hht_roi_blocks(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Vec<(String
         for name in names {
             let g = trial_group.group(&name)?;
             check_roi_fingerprint(&g, ctx.roi_selection_fingerprint)?;
-            let ds = match g.dataset("hilbert_spectrum") {
+            let ds_if = match g.dataset("instantaneous_frequency") {
                 Ok(d) => d,
                 Err(_) => continue,
             };
-            let (t, [n_rows, _, _]) = read_3d_as_f32(&ds)?;
+            let ds_env = match g.dataset("envelope") {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let (inst_freq, [_, n_rows, _]) = read_3d_as_f32(&ds_if)?;
+            let (envelope, _) = read_3d_as_f32(&ds_env)?;
             if (n_rows as usize) != ctx.roi_indices.len() {
                 anyhow::bail!(
                     "hht_roi blocks_std_roi/{}/{} rows {} != target ROI count {}",
@@ -391,7 +460,7 @@ fn load_hht_roi_blocks(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Vec<(String
                     ctx.roi_indices.len()
                 );
             }
-            out.push((name, t));
+            out.push((name, scatter_hht_spectrum(&inst_freq, &envelope)));
         }
     }
     Ok(out)
@@ -557,6 +626,57 @@ pub fn run_baseline_chunked(
         n_chunks = CHUNK_COUNT,
         ms = started.elapsed().as_millis() as u64,
         "baseline_chunked done"
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Strategy A' — restAP, baseline chunked feature-space mean
+// ---------------------------------------------------------------------------
+
+/// Split full-run spectrum into `CHUNK_COUNT` time chunks, run DenseNet on each
+/// chunk independently, then mean the resulting feature vectors across chunks
+/// per ROI. Single-leaf write under `features/<src>/baseline_chunked_feature_mean`.
+///
+/// Differs from `baseline_averaged` (image-space mean): DenseNet sees each
+/// chunk individually, then features are averaged. Because DenseNet is
+/// nonlinear, mean(features(x_i)) != features(mean(x_i)).
+pub fn run_baseline_chunked_feature_mean(
+    ctx: &AnalysisCtx,
+    features_root: &hdf5::Group,
+    src: FeatureSrc,
+    full_spec: &Tensor,
+) -> Result<()> {
+    let analysis = "baseline_chunked_feature_mean";
+    let src_g = open_or_create_group(features_root, src.group_name(), false)?;
+    if already_done(&src_g, analysis, ctx.force) {
+        debug!(
+            src = src.group_name(),
+            "baseline_chunked_feature_mean: exists, skipping"
+        );
+        return Ok(());
+    }
+    let chunks = chunk_along_time(full_spec, CHUNK_COUNT);
+    let started = Instant::now();
+
+    let per_chunk_features: Vec<Tensor> = chunks
+        .iter()
+        .map(|chunk| {
+            let (per_roi, _) = extract(ctx, src, chunk);
+            per_roi
+        })
+        .collect();
+
+    let stacked = Tensor::stack(&per_chunk_features, 0); // [n_chunks, n_rois, feat_dim]
+    let per_roi = stacked.mean_dim(Some([0i64].as_slice()), false, Kind::Float);
+    let mean = per_roi.mean_dim(Some([0i64].as_slice()), false, Kind::Float);
+
+    write_features(&src_g, analysis, &per_roi, &mean, ctx, analysis)?;
+    info!(
+        src = src.group_name(),
+        n_chunks = CHUNK_COUNT,
+        ms = started.elapsed().as_millis() as u64,
+        "baseline_chunked_feature_mean done"
     );
     Ok(())
 }
@@ -883,6 +1003,7 @@ pub fn run_for_file(ctx: &AnalysisCtx, h5: &hdf5::File) -> Result<()> {
         "restAP" => {
             if let Some(spec) = load_cwt_full_run(h5, ctx)? {
                 run_baseline_chunked(ctx, &features_root, FeatureSrc::Cwt, &spec)?;
+                run_baseline_chunked_feature_mean(ctx, &features_root, FeatureSrc::Cwt, &spec)?;
                 run_baseline_averaged(ctx, &features_root, FeatureSrc::Cwt, &spec)?;
                 run_baseline_resized(ctx, &features_root, FeatureSrc::Cwt, &spec)?;
             } else {
@@ -890,6 +1011,7 @@ pub fn run_for_file(ctx: &AnalysisCtx, h5: &hdf5::File) -> Result<()> {
             }
             if let Some(spec) = load_hht_full_run(h5, ctx)? {
                 run_baseline_chunked(ctx, &features_root, FeatureSrc::Hht, &spec)?;
+                run_baseline_chunked_feature_mean(ctx, &features_root, FeatureSrc::Hht, &spec)?;
                 run_baseline_averaged(ctx, &features_root, FeatureSrc::Hht, &spec)?;
                 run_baseline_resized(ctx, &features_root, FeatureSrc::Hht, &spec)?;
             } else {
@@ -897,6 +1019,7 @@ pub fn run_for_file(ctx: &AnalysisCtx, h5: &hdf5::File) -> Result<()> {
             }
             if let Some(spec) = load_hht_roi_full_run(h5, ctx)? {
                 run_baseline_chunked(ctx, &features_root, FeatureSrc::HhtRoi, &spec)?;
+                run_baseline_chunked_feature_mean(ctx, &features_root, FeatureSrc::HhtRoi, &spec)?;
                 run_baseline_averaged(ctx, &features_root, FeatureSrc::HhtRoi, &spec)?;
                 run_baseline_resized(ctx, &features_root, FeatureSrc::HhtRoi, &spec)?;
             } else {
@@ -904,6 +1027,7 @@ pub fn run_for_file(ctx: &AnalysisCtx, h5: &hdf5::File) -> Result<()> {
             }
             if let Some(spec) = load_resting_state_full_run(h5, ctx)? {
                 run_baseline_chunked(ctx, &features_root, FeatureSrc::Ts, &spec)?;
+                run_baseline_chunked_feature_mean(ctx, &features_root, FeatureSrc::Ts, &spec)?;
                 run_baseline_resized(ctx, &features_root, FeatureSrc::Ts, &spec)?;
             } else {
                 debug!("restAP: no full_run_std timeseries, skipping analysis")
@@ -935,8 +1059,18 @@ pub fn run_for_file(ctx: &AnalysisCtx, h5: &hdf5::File) -> Result<()> {
                 run_task_concat(ctx, &features_root, FeatureSrc::HhtRoi, &hht_roi_blocks)?;
                 run_task_per_block(ctx, &features_root, FeatureSrc::HhtRoi, &hht_roi_blocks)?;
                 run_task_averaged(ctx, &features_root, FeatureSrc::HhtRoi, &hht_roi_blocks)?;
-                run_task_per_block_resized(ctx, &features_root, FeatureSrc::HhtRoi, &hht_roi_blocks)?;
-                run_task_averaged_resized(ctx, &features_root, FeatureSrc::HhtRoi, &hht_roi_blocks)?;
+                run_task_per_block_resized(
+                    ctx,
+                    &features_root,
+                    FeatureSrc::HhtRoi,
+                    &hht_roi_blocks,
+                )?;
+                run_task_averaged_resized(
+                    ctx,
+                    &features_root,
+                    FeatureSrc::HhtRoi,
+                    &hht_roi_blocks,
+                )?;
             } else {
                 debug!("hammerAP: no HHT blocks_std_roi, skipping HHT-ROI analyses");
             }
