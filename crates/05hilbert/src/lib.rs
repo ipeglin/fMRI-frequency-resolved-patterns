@@ -41,6 +41,34 @@ struct HHTResult {
     hilbert_spectrum_shape: [usize; 3],
 }
 
+use num_complex::Complex64;
+
+fn compute_instantaneous_angular_freq(analytic: &[Complex64], sampling_rate: f64) -> Vec<f64> {
+    let n = analytic.len();
+    if n < 2 {
+        return vec![0.0; n];
+    }
+
+    let mut omega = vec![0.0; n];
+    let dt = 1.0 / sampling_rate;
+
+    for i in 1..n {
+        // The phase difference Δθ can be found by taking the argument of
+        // the product of the current sample and the conjugate of the previous one.
+        // Formula: Δθ = arg(z[t] * conj(z[t-1]))
+        let phase_diff = (analytic[i] * analytic[i - 1].conj()).arg();
+
+        // ω = Δθ / Δt gives rad/s
+        omega[i] = phase_diff / dt;
+    }
+
+    // Handle the first element by back-filling (constant extension)
+    // so the vector length matches the input signal.
+    omega[0] = omega[1];
+
+    omega
+}
+
 /// Compute HHT from a modes array with shape [n_modes, n_channels, n_timepoints].
 ///
 /// Modes are read from HDF5 as flat row-major with that shape ordering.
@@ -92,12 +120,8 @@ fn compute_hht(cfg: &AppConfig, modes_flat: &[f32], shape: &[usize]) -> Result<H
 
             // Envelope (instantaneous amplitude)
             let amp: Vec<f64> = analytic.iter().map(|z| z.norm()).collect();
+            let i_omega = compute_instantaneous_angular_freq(&analytic, sampling_rate);
 
-            // Instantaneous frequency via unwrapped phase derivative
-            let phase: Vec<f64> = analytic.iter().map(|z| z.im.atan2(z.re)).collect();
-            let ifreq = unwrapped_phase_to_ifreq(&phase, sampling_rate);
-
-            // Write envelope and inst_freq into flat buffers
             let base = m * n_channels * n_timepoints + c * n_timepoints;
             envelope_buf[base..base + n_timepoints].copy_from_slice(&amp);
             inst_freq_buf[base..base + n_timepoints].copy_from_slice(&ifreq);
@@ -156,40 +180,6 @@ fn compute_hht(cfg: &AppConfig, modes_flat: &[f32], shape: &[usize]) -> Result<H
         hilbert_spectrum: hilbert_spectrum_buf,
         hilbert_spectrum_shape: [n_channels, n_freq, n_timepoints],
     })
-}
-
-/// Unwrap phase and compute instantaneous frequency via central differences.
-fn unwrapped_phase_to_ifreq(phase: &[f64], fs: f64) -> Vec<f64> {
-    use std::f64::consts::PI;
-    let n = phase.len();
-    if n == 0 {
-        return vec![];
-    }
-
-    let mut unwrapped = vec![phase[0]];
-    let mut prev = phase[0];
-    for &p in &phase[1..] {
-        let mut diff = p - prev;
-        while diff > PI {
-            diff -= 2.0 * PI;
-        }
-        while diff < -PI {
-            diff += 2.0 * PI;
-        }
-        unwrapped.push(*unwrapped.last().unwrap() + diff);
-        prev = p;
-    }
-
-    let mut ifreq = Vec::with_capacity(n);
-    // Forward difference at first point
-    ifreq.push(fs * (unwrapped[1] - unwrapped[0]) / (2.0 * PI));
-    // Central differences
-    for i in 1..n - 1 {
-        ifreq.push(fs * (unwrapped[i + 1] - unwrapped[i - 1]) / (4.0 * PI));
-    }
-    // Backward difference at last point
-    ifreq.push(fs * (unwrapped[n - 1] - unwrapped[n - 2]) / (2.0 * PI));
-    ifreq
 }
 
 /// Write all HHT outputs to an HDF5 group.
