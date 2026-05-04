@@ -78,7 +78,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         matched_regions = ?roi_matched_regions,
         roi_selection_name = %roi_selection_name,
         roi_selection_fingerprint = %roi_selection_fingerprint,
-        "selected target ROIs"
+        "Using ROI-stratified configuration"
     );
 
     let subjects: BTreeMap<String, PathBuf> = fs::read_dir(&cfg.consolidated_data_dir)?
