@@ -551,7 +551,11 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         })
         .expect("Failed to read the directory");
 
-        info!(num_files = available_timeseries.len(), "processing subject");
+        info!(
+            subject = formatted_id,
+            num_files = available_timeseries.len(),
+            "processing subject started"
+        );
 
         for file in &available_timeseries {
             let task_name = file.get("task").unwrap_or("unknown");
