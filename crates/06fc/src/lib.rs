@@ -374,14 +374,14 @@ fn fc_for_mvmd_subgroup(
     };
 
     if let Some(expected) = roi_fingerprint {
-        check_roi_fingerprint(&src, expected, &format!("/04mvmd/.../{name}"))?;
+        check_roi_fingerprint(&src, expected)?;
     }
 
     if !force && fc_parent.group(name).is_ok() {
         if subgroup_complete(fc_parent, name, "n_modes") {
             if let Some(expected) = roi_fingerprint {
                 let existing = fc_parent.group(name)?;
-                check_roi_fingerprint(&existing, expected, &format!("/06fc/.../{name}"))?;
+                check_roi_fingerprint(&existing, expected)?;
             }
             debug!(
                 task_name = task_name,
