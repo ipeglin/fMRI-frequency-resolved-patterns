@@ -166,6 +166,8 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
 
         for rs_file in &available_resting_state_ts {
             let task_name = rs_file.get("task").unwrap_or("unknown");
+            let run_idx = rs_file.get("run").unwrap_or("unknown");
+
             let path = rs_file
                 .try_to_path_buf()
                 .context("BidsFilename has no path associated with it")?;
@@ -187,7 +189,9 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
 
             info!(
                 subject = formatted_id,
+                file = %rs_file,
                 task_name = task_name,
+                run = run_idx,
                 signal_type = "full_run",
                 input_dataset = format!("/01fmri_parcellation/{}", FULL_RUN_DATASET),
                 output_dataset = format!("/{}/{}", CWT_CRATE_GROUP, FULL_RUN_DATASET),
@@ -246,9 +250,13 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
 
         for task_file in &available_hammer_task_ts {
             let task_name = task_file.get("task").unwrap_or("unknown");
+            let run_idx = task_file.get("run").unwrap_or("unknown");
 
             info!(
+                subject = formatted_id,
+                file = %task_file,
                 task_name = task_name,
+                run = run_idx,
                 signal_type = "blocks",
                 input_group = format!("/02fmri_segment_trials/{}", BLOCKS_GROUP),
                 output_group = format!("/{}/{}", CWT_CRATE_GROUP, BLOCKS_GROUP),
