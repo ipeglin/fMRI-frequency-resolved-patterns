@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use ndarray::{Array2, Axis};
 use polars::prelude::*;
 use utils::atlas::BrainAtlas;
-use utils::bids_filename::{BidsFilename, filter_directory_bids_files};
+use utils::bids_filename::{BidsFilename, filter_directory_bids_files, sort_bids_vec};
 use utils::bids_subject_id::BidsSubjectId;
 use utils::config::AppConfig;
 use utils::hdf5_io::{H5Attr, H5AttrValue, ensure_path, path_exists, prepare_dataset, write_attrs};
@@ -245,10 +245,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                 "opening output group"
             );
 
-            // Top-level /04mvmd never wiped: per-subgroup `open_or_create_group`
-            // calls below honour `cfg.force`. Wiping the parent on heavy files
-            // can leave HDF5's symbol table in a stale state where the next
-            // H5Gcreate2 fails with "name already exists".
             let mvmd_group = ensure_path(&h5_file, MVMD_CRATE_GROUP, cfg.force)
                 .context(format!("failed to open/create group /{MVMD_CRATE_GROUP}"))?;
             write_mvmd_algorithm_attrs_if_missing(
@@ -259,12 +255,10 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                 &admm_config,
             )?;
 
-            // Full-run Decomposition //
-            let fr_already_done = !cfg.force
-                && path_exists(
-                    &mvmd_group,
-                    format!("{FULL_RUN_GROUP}/center_frequencies").as_str(),
-                );
+            // Full-run Decomposition
+            let fr_already_done =
+                !cfg.force && path_exists(&mvmd_group, format!("{FULL_RUN_GROUP}/modes").as_str());
+
             if fr_already_done {
                 let fr_group = mvmd_group.group(FULL_RUN_GROUP).context(
                     format!("failed to open group /{MVMD_CRATE_GROUP}/{FULL_RUN_GROUP} for center_frequencies sync"),
@@ -418,42 +412,35 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                 );
             }
 
-            // ROI-specific Full-run Decomposition //
-            // Skipped entirely when no ROI selection is configured; the
-            // full-run `full_run_std` block above still runs.
+            // ROI-specific Full-run Decomposition
+
+            // Skip entirely when no ROI selection is configured
             if !roi_subset_enabled {
                 warn!(
                     task_name = task_name,
                     run = run_idx,
                     "no ROI selection configured, skipping ROI-only full-run MVMD"
                 );
-            } else {
-                let fr_roi_group = mvmd_group.group(FULL_RUN_GROUP_ROI_STRATIFIED).with_context(|| {
+                continue;
+            }
+
+            let fr_roi_group = ensure_path(&mvmd_group, FULL_RUN_GROUP_ROI_STRATIFIED, cfg.force)?;
+            let roi_fingerprint_unchanged =
+                check_roi_fingerprint(&fr_roi_group, &roi_selection_fingerprint).is_ok();
+
+            let fr_roi_already_done =
+                !cfg.force && path_exists(&fr_roi_group, "modes") && roi_fingerprint_unchanged;
+
+            if fr_roi_already_done {
+                let fr_roi_group = mvmd_group.group(FULL_RUN_GROUP_ROI_STRATIFIED).context(
                     format!(
                         "failed to open group /{MVMD_CRATE_GROUP}/{FULL_RUN_GROUP_ROI_STRATIFIED} for center_frequencies sync"
                     )
-                })?;
+                )?;
 
-                // roi fingerprint config same as HDF5 attribute
-                let roi_fingerprint_unchanged = check_roi_fingerprint(
-                    &fr_roi_group,
-                    &roi_selection_fingerprint,
-                    &format!("/{MVMD_CRATE_GROUP}/{FULL_RUN_GROUP_ROI_STRATIFIED}"),
-                )
-                .is_ok();
-                let fr_roi_done = !cfg.force
-                    // already has MVMD results
-                    && path_exists(
-                        &mvmd_group,
-                        format!("{FULL_RUN_GROUP_ROI_STRATIFIED}/center_frequencies").as_str(),
-                    )
-                    && roi_fingerprint_unchanged;
-                if fr_roi_done {
-                    sync_center_frequencies_attr_from_group(&fr_roi_group).with_context(|| {
-                        format!(
+                sync_center_frequencies_attr_from_group(&fr_roi_group).context(format!(
                             "failed to sync center_frequencies attribute to /{MVMD_CRATE_GROUP}/{FULL_RUN_GROUP_ROI_STRATIFIED}/modes"
-                        )
-                    })?;
+                ))?;
 
                 warn!(
                     file = %rs_file,
@@ -473,109 +460,105 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     "Commencing analysis. ROI-stratified decomposition missing or overwritten"
                 );
 
-                    let mvmd_roi_start = Instant::now();
+                let mvmd_roi_start = Instant::now();
 
-                    let parc_group = h5_file
-                        .group("01fmri_parcellation")
-                        .context("failed to open group /01fmri_parcellation for ROI subset")?;
-                    let dataset = parc_group.dataset("full_run_std").context(
-                        "failed to open dataset /01fmri_parcellation/full_run_std for ROI subset",
-                    )?;
-                    let data: Array2<f32> = dataset.read_2d()?;
-                    let roi_data = data.select(Axis(0), &roi_row_indices);
+                let parc_group = h5_file
+                    .group("01fmri_parcellation")
+                    .context("failed to open group /01fmri_parcellation for ROI subset")?;
+                let dataset = parc_group.dataset("full_run_std").context(
+                    "failed to open dataset /01fmri_parcellation/full_run_std for ROI subset",
+                )?;
+                let data: Array2<f32> = dataset.read_2d()?;
+                let roi_data = data.select(Axis(0), &roi_row_indices);
 
-                    let roi_columns: Vec<Column> = roi_data
-                        .outer_iter()
-                        .zip(roi_labels.iter())
-                        .map(|(row_view, label)| {
-                            let slice = row_view
-                                .as_slice()
-                                .expect("Data in ndarray must be contiguous for Polars conversion");
-                            Series::new(label.as_str().into(), slice).into()
-                        })
-                        .collect();
+                let roi_columns: Vec<Column> = roi_data
+                    .outer_iter()
+                    .zip(roi_labels.iter())
+                    .map(|(row_view, label)| {
+                        let slice = row_view
+                            .as_slice()
+                            .expect("Data in ndarray must be contiguous for Polars conversion");
+                        Series::new(label.as_str().into(), slice).into()
+                    })
+                    .collect();
 
-                    let roi_df = DataFrame::new(roi_columns)?;
-                    let fr_roi_mvmd = MVMD::from_dataframe(&roi_df, MVMD_ALPHA, sampling_rate)?
-                        .with_admm_config(admm_config.clone());
+                let roi_df = DataFrame::new(roi_columns)?;
+                let fr_roi_mvmd = MVMD::from_dataframe(&roi_df, MVMD_ALPHA, sampling_rate)?
+                    .with_admm_config(admm_config.clone());
 
-                    let roi_decomposition = fr_roi_mvmd.decompose(num_modes);
+                let roi_decomposition = fr_roi_mvmd.decompose(num_modes);
 
-                    let mvmd_roi_duration_ms = mvmd_roi_start.elapsed().as_millis();
+                let mvmd_roi_duration_ms = mvmd_roi_start.elapsed().as_millis();
 
-                    let fr_roi_group =
-                        ensure_path(&mvmd_group, FULL_RUN_GROUP_ROI_STRATIFIED, cfg.force)
-                            .with_context(|| {
-                                format!(
+                let fr_roi_group =
+                        ensure_path(&mvmd_group, FULL_RUN_GROUP_ROI_STRATIFIED, cfg.force || !roi_fingerprint_unchanged)
+                            .context(format!(
                                     "failed to open/create group /{MVMD_CRATE_GROUP}/{FULL_RUN_GROUP_ROI_STRATIFIED}"
-                                )
-                            })?;
+                            )
+                        )?;
 
-                    let roi_write_start = Instant::now();
+                let roi_write_start = Instant::now();
 
-                    let roi_modes_shape = roi_decomposition.modes.shape();
-                    let fr_roi_modes_ds = prepare_dataset::<f64>(
-                        &fr_roi_group,
-                        "modes",
-                        &[roi_modes_shape[0], roi_modes_shape[1], roi_modes_shape[2]],
-                    )?;
-                    let fr_roi_modes_metadata = vec![H5Attr {
-                        name: "center_frequencies".to_string(),
-                        value: H5AttrValue::F64Slice(
-                            roi_decomposition
-                                .center_frequencies
-                                .as_slice()
-                                .unwrap()
-                                .to_vec(),
-                        ),
-                    }];
-                    fr_roi_modes_ds.write_raw(roi_decomposition.modes.as_slice().unwrap())?;
-                    write_attrs(&fr_roi_modes_ds, &fr_roi_modes_metadata)?;
+                let roi_modes_shape = roi_decomposition.modes.shape();
+                let fr_roi_modes_ds = prepare_dataset::<f64>(
+                    &fr_roi_group,
+                    "modes",
+                    &[roi_modes_shape[0], roi_modes_shape[1], roi_modes_shape[2]],
+                )?;
+                let fr_roi_modes_metadata = vec![H5Attr {
+                    name: "center_frequencies".to_string(),
+                    value: H5AttrValue::F64Slice(
+                        roi_decomposition
+                            .center_frequencies
+                            .as_slice()
+                            .unwrap()
+                            .to_vec(),
+                    ),
+                }];
+                fr_roi_modes_ds.write_raw(roi_decomposition.modes.as_slice().unwrap())?;
+                write_attrs(&fr_roi_modes_ds, &fr_roi_modes_metadata)?;
 
-                    let roi_cf_shape = roi_decomposition.frequency_traces.shape();
-                    let freq_trace_ds = prepare_dataset::<f64>(
-                        &fr_roi_group,
-                        "frequency_traces",
-                        &[roi_cf_shape[0], roi_cf_shape[1]],
-                    )?;
-                    freq_trace_ds
-                        .write_raw(roi_decomposition.frequency_traces.as_slice().unwrap())?;
+                let roi_cf_shape = roi_decomposition.frequency_traces.shape();
+                let freq_trace_ds = prepare_dataset::<f64>(
+                    &fr_roi_group,
+                    "frequency_traces",
+                    &[roi_cf_shape[0], roi_cf_shape[1]],
+                )?;
+                freq_trace_ds.write_raw(roi_decomposition.frequency_traces.as_slice().unwrap())?;
 
-                    let center_freqs_shape = &[roi_decomposition.center_frequencies.len()];
-                    let center_freqs_ds = prepare_dataset::<f64>(
-                        &fr_roi_group,
-                        "center_frequencies",
-                        center_freqs_shape,
-                    )?;
-                    center_freqs_ds
-                        .write_raw(roi_decomposition.center_frequencies.as_slice().unwrap())?;
+                let center_freqs_shape = &[roi_decomposition.center_frequencies.len()];
+                let center_freqs_ds = prepare_dataset::<f64>(
+                    &fr_roi_group,
+                    "center_frequencies",
+                    center_freqs_shape,
+                )?;
+                center_freqs_ds
+                    .write_raw(roi_decomposition.center_frequencies.as_slice().unwrap())?;
 
-                    let roi_indices_shape = &[roi_indices_u32.len()];
-                    let roi_indice_ds =
-                        prepare_dataset::<f64>(&fr_roi_group, "roi_indices", roi_indices_shape)?;
-                    roi_indice_ds.write_raw(&roi_indices_u32)?;
+                let roi_indices_shape = &[roi_indices_u32.len()];
+                let roi_indice_ds =
+                    prepare_dataset::<f64>(&fr_roi_group, "roi_indices", roi_indices_shape)?;
+                roi_indice_ds.write_raw(&roi_indices_u32)?;
 
-                    write_attrs(
-                        &fr_roi_group,
-                        &[
-                            H5Attr::u32("num_iterations", roi_decomposition.num_iterations as u32),
-                            H5Attr::u32("n_rois", roi_indices_u32.len() as u32),
-                            H5Attr::string("roi_labels", roi_labels.join(",")),
-                            H5Attr::string("roi_matched_regions", roi_matched_regions.join(",")),
-                            H5Attr::string("roi_selection_name", &roi_selection_name),
-                            H5Attr::string("roi_selection_fingerprint", &roi_selection_fingerprint),
-                            H5Attr::string("channels", roi_decomposition.channels.join(",")),
-                        ],
-                    )?;
-                    write_mvmd_algorithm_attrs_if_missing(
-                        &fr_roi_group,
-                        MVMD_ALPHA,
-                        sampling_rate,
-                        num_modes,
-                        &admm_config,
-                    )?;
-
-                    let roi_write_duration_ms = roi_write_start.elapsed().as_millis();
+                write_attrs(
+                    &fr_roi_group,
+                    &[
+                        H5Attr::u32("num_iterations", roi_decomposition.num_iterations as u32),
+                        H5Attr::u32("n_rois", roi_indices_u32.len() as u32),
+                        H5Attr::string("roi_labels", roi_labels.join(",")),
+                        H5Attr::string("roi_matched_regions", roi_matched_regions.join(",")),
+                        H5Attr::string("roi_selection_name", &roi_selection_name),
+                        H5Attr::string("roi_selection_fingerprint", &roi_selection_fingerprint),
+                        H5Attr::string("channels", roi_decomposition.channels.join(",")),
+                    ],
+                )?;
+                write_mvmd_algorithm_attrs_if_missing(
+                    &fr_roi_group,
+                    MVMD_ALPHA,
+                    sampling_rate,
+                    num_modes,
+                    &admm_config,
+                )?;
 
                 let roi_write_duration_ms = roi_write_start.elapsed().as_millis();
 
@@ -674,21 +657,18 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
 
                     // Check if output group already exists (/04mvmd/blocks_std/block_X/)
                     let block_already_done = !cfg.force
-                        && path_exists(
-                            &h5_file,
-                            format!("{}/center_frequencies", block_name_path).as_str(),
-                        );
+                        && path_exists(&h5_file, format!("{}/modes", block_name_path).as_str());
                     if block_already_done {
                         let existing_block_group =
-                            h5_file.group(&block_name_path).with_context(|| {
-                                format!("failed to open existing output group {block_name_path}")
-                            })?;
+                            h5_file.group(&block_name_path).context(format!(
+                                "task file failed to open existing output group {block_name_path}"
+                            ))?;
 
-                        sync_center_frequencies_attr_from_group(&existing_block_group).with_context(|| {
+                        sync_center_frequencies_attr_from_group(&existing_block_group).context(
                             format!(
                                 "failed to sync center_frequencies attribute to {block_name_path}/modes"
                             )
-                        })?;
+                        )?;
 
                         debug!(
                             task_name = task_name,
@@ -702,9 +682,9 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     }
 
                     debug!(dataset_path = %input_block_dataset_path, "reading input dataset");
-                    let input_ds = trial_group.dataset(block_name).with_context(|| {
-                        format!("failed to open input dataset {input_block_dataset_path}")
-                    })?;
+                    let input_ds = trial_group.dataset(block_name).context(format!(
+                        "failed to open input dataset {input_block_dataset_path}"
+                    ))?;
                     let block_signal_f32: Array2<f32> = input_ds.read_2d()?;
 
                     // Read metadata attributes from the input dataset
@@ -748,21 +728,15 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     let block_decomposition = block_mvmd.decompose(num_modes);
                     let block_mvmd_duration_ms = block_start.elapsed().as_millis();
 
-                    debug!(
-                        group_path = %block_name_path,
-                        force = cfg.force,
-                        "opening output block group"
-                    );
-
-                    let block_group = ensure_path(&h5_file, &block_name_path, cfg.force)
-                        .with_context(|| {
-                            format!("failed to open/create output group {block_name_path}")
-                        })?; // /04mvmd/blocks_std/block_X/
+                    let block_name_group = ensure_path(&h5_file, &block_name_path, cfg.force)
+                        .context(format!(
+                            "failed to open/create output group {block_name_path}"
+                        ))?;
 
                     let block_write_start = Instant::now();
 
                     write_attrs(
-                        &block_group,
+                        &block_name_group,
                         &[H5Attr::u32(
                             "num_iterations",
                             block_decomposition.num_iterations as u32,
@@ -773,7 +747,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
 
                     let bm_shape = block_decomposition.modes.shape();
                     let modes_ds = prepare_dataset::<f64>(
-                        &block_group,
+                        &block_name_group,
                         "modes",
                         &[bm_shape[0], bm_shape[1], bm_shape[2]],
                     )?;
@@ -790,26 +764,21 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     modes_ds.write_raw(block_decomposition.modes.as_slice().unwrap())?;
                     write_attrs(&modes_ds, &modes_metadata)?;
 
-                    let bcf_shape = block_decomposition.frequency_traces.shape();
-                    debug!(dataset_path = %format!("{block_name_path}/frequency_traces"), "writing output dataset");
-                    let freq_traces_ds = prepare_dataset::<f64>(
-                        &block_group,
+                    let bft_shape = block_decomposition.frequency_traces.shape();
+                    let bft_ds = prepare_dataset::<f64>(
+                        &block_name_group,
                         "frequency_traces",
-                        &[bcf_shape[0], bcf_shape[1]],
+                        &[bft_shape[0], bft_shape[1]],
                     )?;
-                    freq_traces_ds
-                        .write_raw(block_decomposition.frequency_traces.as_slice().unwrap())?;
+                    bft_ds.write_raw(block_decomposition.frequency_traces.as_slice().unwrap())?;
 
-                    let center_freqs_shape = &[block_decomposition.center_frequencies.len()];
-                    let center_freqs_ds = prepare_dataset::<f64>(
-                        &block_group,
-                        "center_frequencies",
-                        center_freqs_shape,
-                    )?;
-                    debug!(dataset_path = %format!("{block_name_path}/center_frequencies"), "writing output dataset");
+                    let bcf_shape = &[block_decomposition.center_frequencies.len()];
+                    let bcf_ds =
+                        prepare_dataset::<f64>(&block_name_group, "center_frequencies", bcf_shape)?;
+                    bcf_ds.write_raw(block_decomposition.center_frequencies.as_slice().unwrap())?;
 
                     write_mvmd_algorithm_attrs_if_missing(
-                        &block_group,
+                        &block_name_group,
                         MVMD_ALPHA,
                         sampling_rate,
                         num_modes,
@@ -845,16 +814,10 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                 );
                 continue;
             }
-            let mvmd_blocks_roi_group = ensure_path(
-                &mvmd_group,
-                ALL_BLOCKS_GROUP_ROI_STRATIFIED,
-                cfg.force,
-            )
-            .with_context(|| {
-                format!(
-                    "failed to open/create output group /{MVMD_CRATE_GROUP}/{ALL_BLOCKS_GROUP_ROI_STRATIFIED}"
-                )
-            })?;
+            let all_blocks_roi_group =
+                format!("{MVMD_CRATE_GROUP}/{ALL_BLOCKS_GROUP_ROI_STRATIFIED}");
+            let all_blocks_roi_group = ensure_path(&h5_file, &all_blocks_roi_group, cfg.force)
+                .context(format!("Failed to prepare deep HDF5 path"))?;
 
             for trial_type in TARGET_TRIAL_TYPES {
                 let trial_group_path = format!("/02fmri_segment_trials/blocks_std/{trial_type}");
@@ -894,36 +857,32 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
 
                 for (block_idx, block_name) in block_names.iter().enumerate() {
                     let input_block_dataset_path = format!("{trial_group_path}/{block_name}");
-                    let output_block_name_path = format!(
+                    let block_name_path = format!(
                         "/{MVMD_CRATE_GROUP}/{ALL_BLOCKS_GROUP_ROI_STRATIFIED}/{trial_type}/{block_name}"
                     );
 
-                    let existing_block_group =
-                        h5_file.group(&output_block_name_path).with_context(|| {
-                            format!("failed to open existing output group {output_block_name_path}")
-                        })?;
 
-                    // roi fingerprint config same as HDF5 attribute
-                    let roi_fingerprint_unchanged = check_roi_fingerprint(
-                        &existing_block_group,
-                        &roi_selection_fingerprint,
-                        &output_block_name_path,
-                    )
-                    .is_ok();
+                    let roi_block_fingerprint_ok = h5_file
+                        .group(&block_name_path)
+                        .ok()
+                        .map(|g| check_roi_fingerprint(&g, &roi_selection_fingerprint).is_ok())
+                        .unwrap_or(false);
+
                     let roi_block_already_done = !cfg.force
-                        && path_exists(
-                            &h5_file,
-                            format!("{}/center_frequencies", output_block_name_path).as_str(),
-                        )
-                        && roi_fingerprint_unchanged;
+                        && path_exists(&h5_file, format!("{}/modes", block_name_path).as_str())
+                        && roi_block_fingerprint_ok;
 
                     if roi_block_already_done {
+                        let existing_block_group =
+                            h5_file.group(&block_name_path).context(format!(
+                                "task file failed to open existing output group {block_name_path}"
+                            ))?;
                         sync_center_frequencies_attr_from_group(&existing_block_group)
-                            .with_context(|| {
+                            .context(
                                 format!(
-                                    "failed to sync center_frequencies attribute to {output_block_name_path}/modes"
+                                    "failed to sync center_frequencies attribute to {block_name_path}/modes"
                                 )
-                            })?;
+                            )?;
 
                         debug!(
                             task_name = task_name,
@@ -937,9 +896,9 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     }
 
                     debug!(dataset_path = %input_block_dataset_path, "reading input dataset");
-                    let input_ds = trial_group.dataset(block_name).with_context(|| {
-                        format!("failed to open input dataset {input_block_dataset_path}")
-                    })?;
+                    let input_ds = trial_group.dataset(block_name).context(format!(
+                        "failed to open input dataset {input_block_dataset_path}"
+                    ))?;
                     let block_signal_f32: Array2<f32> = input_ds.read_2d()?;
 
                     // Read metadata attributes from the input dataset
@@ -988,12 +947,12 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
 
                     let block_name_group = ensure_path(
                         &h5_file,
-                        &output_block_name_path,
-                        cfg.force,
+                        &block_name_path,
+                        cfg.force || !roi_block_fingerprint_ok,
                     )
-                    .with_context(|| {
-                        format!("failed to open/create output group {output_block_name_path}")
-                    })?;
+                    .context(format!(
+                        "failed to open/create output group {block_name_path}"
+                    ))?;
 
                     let block_write_start = Instant::now();
 
