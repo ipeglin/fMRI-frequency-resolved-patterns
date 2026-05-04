@@ -176,13 +176,47 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         )
         .entered();
 
-        let available_resting_state_ts: Vec<BidsFilename> =
+        let mut available_resting_state_ts: Vec<BidsFilename> =
             filter_directory_bids_files(dir, |bids| bids.get("task") == Some("restAP"))
                 .expect("Failed to read the directory");
+        sort_bids_vec(
+            &mut available_resting_state_ts,
+            &["run"],
+            |key, a, b| match key {
+                "run" => {
+                    // Attempt to parse both strings as integers
+                    let num_a = a.parse::<u32>();
+                    let num_b = b.parse::<u32>();
 
-        let available_hammer_task_ts: Vec<BidsFilename> =
+                    match (num_a, num_b) {
+                        (Ok(n_a), Ok(n_b)) => n_a.cmp(&n_b), // Numeric sort
+                        _ => a.cmp(b), // Fallback to string sort if parsing fails
+                    }
+                }
+                _ => a.cmp(b), // Default string comparison for other keys
+            },
+        );
+
+        let mut available_hammer_task_ts: Vec<BidsFilename> =
             filter_directory_bids_files(dir, |bids| bids.get("task") == Some("hammerAP"))
                 .expect("Failed to read the directory");
+        sort_bids_vec(
+            &mut available_hammer_task_ts,
+            &["run"],
+            |key, a, b| match key {
+                "run" => {
+                    // Attempt to parse both strings as integers
+                    let num_a = a.parse::<u32>();
+                    let num_b = b.parse::<u32>();
+
+                    match (num_a, num_b) {
+                        (Ok(n_a), Ok(n_b)) => n_a.cmp(&n_b), // Numeric sort
+                        _ => a.cmp(b), // Fallback to string sort if parsing fails
+                    }
+                }
+                _ => a.cmp(b), // Default string comparison for other keys
+            },
+        );
 
         debug!(
             resting_state_count = available_resting_state_ts.len(),
