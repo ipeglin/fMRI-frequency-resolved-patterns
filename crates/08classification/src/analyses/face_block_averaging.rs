@@ -11,7 +11,9 @@ use utils::bids_subject_id::BidsSubjectId;
 use utils::config::AppConfig;
 
 use crate::classifiers::DistanceMetric;
-use crate::dataset::{AnalysisKind, FeatureSource, build_per_roi_dataset, load_labels};
+use crate::dataset::{
+    AnalysisKind, FeatureSource, build_mean_dataset, build_per_roi_dataset, load_labels,
+};
 use crate::eval::eval_knn_three_way_split;
 
 pub fn run(cfg: &AppConfig) -> Result<()> {
@@ -38,7 +40,11 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         .collect();
     labels.retain(|k, _| subject_ids.contains(k));
 
-    for source in [FeatureSource::Cwt, FeatureSource::Hht, FeatureSource::HhtRoi] {
+    for source in [
+        FeatureSource::Cwt,
+        FeatureSource::Hht,
+        FeatureSource::HhtRoi,
+    ] {
         let (xs, ys, groups) = build_per_roi_dataset(
             &cfg.consolidated_data_dir,
             &subject_ids,
@@ -63,6 +69,40 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             cfg.classification.knn_num_neighbors,
             metric,
             "task_averaged",
+            source,
+            &cfg.resolved_classification_results_dir(),
+        )?;
+    }
+
+    for source in [
+        FeatureSource::Cwt,
+        FeatureSource::Hht,
+        FeatureSource::HhtRoi,
+    ] {
+        let (xs, ys, groups) = build_mean_dataset(
+            &cfg.consolidated_data_dir,
+            &subject_ids,
+            &labels,
+            source,
+            AnalysisKind::TaskAveraged,
+        )?;
+        info!(
+            source = ?source,
+            samples = xs.len(),
+            features = xs.first().map(|r| r.len()).unwrap_or(0),
+            "built task_averaged_mean dataset"
+        );
+        if xs.is_empty() {
+            debug!(source = ?source, "no samples, skipping");
+            continue;
+        }
+        eval_knn_three_way_split(
+            xs,
+            ys,
+            &groups,
+            cfg.classification.knn_num_neighbors,
+            metric,
+            "task_averaged_mean",
             source,
             &cfg.resolved_classification_results_dir(),
         )?;

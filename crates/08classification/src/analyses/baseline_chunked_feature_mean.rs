@@ -1,5 +1,6 @@
-//! Analysis A — restAP baseline chunked: per-ROI rows from
-//! `features/<src>/baseline_chunked/chunk_<i>` over both CWT and HHT.
+//! Analysis A' — restAP baseline chunked feature-space mean: per-ROI rows from
+//! `features/<src>/baseline_chunked_feature_mean` (features averaged across chunks
+//! after DenseNet, not before).
 
 use std::collections::HashSet;
 use std::fs;
@@ -11,17 +12,12 @@ use utils::bids_subject_id::BidsSubjectId;
 use utils::config::AppConfig;
 
 use crate::classifiers::DistanceMetric;
-use crate::dataset::{
-    AnalysisKind, FeatureSource, build_mean_dataset, build_per_roi_dataset, load_labels,
-};
+use crate::dataset::{AnalysisKind, FeatureSource, build_per_roi_dataset, load_labels};
 use crate::eval::eval_knn_three_way_split;
 
 pub fn run(cfg: &AppConfig) -> Result<()> {
     let started = Instant::now();
-    info!(
-        consolidated_data_dir = %cfg.consolidated_data_dir.display(),
-        "starting baseline (chunked) classification"
-    );
+    info!("starting baseline (chunked feature mean) classification");
 
     let metric: DistanceMetric = cfg
         .classification
@@ -42,7 +38,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         })
         .collect();
     labels.retain(|k, _| subject_ids.contains(k));
-    info!(count = labels.len(), "valid subject labels loaded");
 
     for source in [
         FeatureSource::Ts,
@@ -55,13 +50,13 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             &subject_ids,
             &labels,
             source,
-            AnalysisKind::BaselineChunked,
+            AnalysisKind::BaselineChunkedFeatureMean,
         )?;
         info!(
             source = ?source,
             samples = xs.len(),
             features = xs.first().map(|r| r.len()).unwrap_or(0),
-            "built baseline_chunked dataset"
+            "built baseline_chunked_feature_mean dataset"
         );
         if xs.is_empty() {
             debug!(source = ?source, "no samples, skipping");
@@ -73,42 +68,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             &groups,
             cfg.classification.knn_num_neighbors,
             metric,
-            "baseline_chunked",
-            source,
-            &cfg.resolved_classification_results_dir(),
-        )?;
-    }
-
-    for source in [
-        FeatureSource::Ts,
-        FeatureSource::Cwt,
-        FeatureSource::Hht,
-        FeatureSource::HhtRoi,
-    ] {
-        let (xs, ys, groups) = build_mean_dataset(
-            &cfg.consolidated_data_dir,
-            &subject_ids,
-            &labels,
-            source,
-            AnalysisKind::BaselineChunked,
-        )?;
-        info!(
-            source = ?source,
-            samples = xs.len(),
-            features = xs.first().map(|r| r.len()).unwrap_or(0),
-            "built baseline_chunked_mean dataset"
-        );
-        if xs.is_empty() {
-            debug!(source = ?source, "no samples, skipping");
-            continue;
-        }
-        eval_knn_three_way_split(
-            xs,
-            ys,
-            &groups,
-            cfg.classification.knn_num_neighbors,
-            metric,
-            "baseline_chunked_mean",
+            "baseline_chunked_feature_mean",
             source,
             &cfg.resolved_classification_results_dir(),
         )?;
@@ -116,7 +76,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
 
     info!(
         elapsed_ms = started.elapsed().as_millis() as u64,
-        "baseline (chunked) done"
+        "baseline (chunked feature mean) done"
     );
     Ok(())
 }

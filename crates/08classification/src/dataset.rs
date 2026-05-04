@@ -66,6 +66,7 @@ impl std::str::FromStr for FeatureSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnalysisKind {
     BaselineChunked,
+    BaselineChunkedFeatureMean,
     BaselineAveraged,
     BaselineResized,
     TaskConcat,
@@ -79,6 +80,7 @@ impl AnalysisKind {
     pub const fn dir(self) -> &'static str {
         match self {
             Self::BaselineChunked => "baseline_chunked",
+            Self::BaselineChunkedFeatureMean => "baseline_chunked_feature_mean",
             Self::BaselineAveraged => "baseline_averaged",
             Self::BaselineResized => "baseline_resized",
             Self::TaskConcat => "task_concat",
@@ -91,7 +93,10 @@ impl AnalysisKind {
 
     pub const fn task(self) -> &'static str {
         match self {
-            Self::BaselineChunked | Self::BaselineAveraged | Self::BaselineResized => "restAP",
+            Self::BaselineChunked
+            | Self::BaselineChunkedFeatureMean
+            | Self::BaselineAveraged
+            | Self::BaselineResized => "restAP",
             Self::TaskConcat
             | Self::TaskPerBlock
             | Self::TaskPerBlockResized
@@ -368,6 +373,92 @@ where
             subjects = ?subjects_with_nonfinite.iter().take(10).collect::<Vec<_>>(),
             "scrubbed non-finite feature cells (replaced with 0). \
              Investigate upstream feature extraction if fraction is large."
+        );
+    }
+    Ok((xs, ys, groups))
+}
+
+/// Build a flat mean-vector dataset for a given (source, analysis) pair.
+///
+/// One row per (file × leaf). Returns `(xs, ys, groups)` where `groups` is
+/// `subject` for single-leaf analyses or `subject_<leaf>` for multi-leaf ones.
+/// The `roi` column in downstream CSV output will be empty (no `_roiNNN` suffix).
+pub fn build_mean_dataset<I, S>(
+    consolidated_data_dir: &Path,
+    subject_ids: I,
+    labels: &HashMap<String, Label>,
+    source: FeatureSource,
+    kind: AnalysisKind,
+) -> Result<(Vec<Vec<f32>>, Vec<Label>, Vec<String>)>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut xs = Vec::new();
+    let mut ys = Vec::new();
+    let mut groups = Vec::new();
+    let task = kind.task();
+    let mut total_cells_scrubbed: usize = 0;
+    let mut rows_with_nonfinite: usize = 0;
+    let mut subjects_with_nonfinite: BTreeSet<String> = BTreeSet::new();
+
+    for subject in subject_ids {
+        let subject = subject.as_ref().to_string();
+        let Some(&label) = labels.get(&subject) else {
+            debug!(subject, "missing label, skipping");
+            continue;
+        };
+        let dir = consolidated_data_dir.join(&subject);
+        if !dir.is_dir() {
+            continue;
+        }
+        let files = list_subject_h5(&dir)?;
+        for file in files {
+            let bids = BidsFilename::from_path_buf(&file);
+            if bids.get("task") != Some(task) {
+                continue;
+            }
+            for leaf in list_analysis_leaves(&file, source, kind) {
+                match read_mean(&file, source, kind, &leaf) {
+                    Ok(mut row) => {
+                        let fixed = scrub_row_inplace(&mut row);
+                        if fixed > 0 {
+                            total_cells_scrubbed += fixed;
+                            rows_with_nonfinite += 1;
+                            subjects_with_nonfinite.insert(subject.clone());
+                        }
+                        xs.push(row);
+                        ys.push(label);
+                        let mut g = subject.clone();
+                        if !leaf.is_empty() {
+                            g.push_str(&format!("_{}", leaf));
+                        }
+                        groups.push(g);
+                    }
+                    Err(e) => {
+                        debug!(
+                            file = %file.display(),
+                            leaf,
+                            error = %e,
+                            "failed to read mean"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    if total_cells_scrubbed > 0 {
+        let total_cells = xs.iter().map(|r| r.len()).sum::<usize>().max(1);
+        warn!(
+            source = ?source,
+            kind = kind.dir(),
+            cells_scrubbed = total_cells_scrubbed,
+            cells_total = total_cells,
+            fraction = format!("{:.5}", total_cells_scrubbed as f64 / total_cells as f64),
+            rows_with_nonfinite = rows_with_nonfinite,
+            n_subjects = subjects_with_nonfinite.len(),
+            subjects = ?subjects_with_nonfinite.iter().take(10).collect::<Vec<_>>(),
+            "scrubbed non-finite feature cells in mean vectors (replaced with 0)."
         );
     }
     Ok((xs, ys, groups))
