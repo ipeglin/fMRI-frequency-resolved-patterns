@@ -309,34 +309,28 @@ fn process_mvmd_modes_group(
         check_roi_fingerprint(&mvmd_sub, &expected)?;
     }
 
-    let hht_done = !cfg.force
-        && hht_parent
-            .group(name)
-            .map(|g| g.dataset("hilbert_spectrum").is_ok())
-            .unwrap_or(false);
+    let existing_hht = hht_parent.group(name).ok();
+    let hht_data_present = existing_hht
+        .as_ref()
+        .map(|g| g.dataset("hilbert_spectrum").is_ok())
+        .unwrap_or(false);
 
-    if hht_done {
-        if is_roi {
-            let existing = hht_parent.group(name)?;
-            // We only return early if the fingerprint is unchanged (is_ok).
-            // If it fails (is_err), we skip this block and continue execution.
-            if check_roi_fingerprint(&existing, &cfg.roi_selection.fingerprint()).is_ok() {
-                debug!(
-                    task_name = task_name,
-                    group = name,
-                    "HHT already computed and ROI matches, skipping"
-                );
-                return Ok(());
-            }
-        } else {
-            // If it's not a ROI task but hht_done is true, return early as before
-            debug!(
-                task_name = task_name,
-                group = name,
-                "HHT already computed, skipping"
-            );
-            return Ok(());
-        }
+    let roi_fingerprint_unchanged = if is_roi {
+        existing_hht
+            .as_ref()
+            .map(|g| check_roi_fingerprint(g, &cfg.roi_selection.fingerprint()).is_ok())
+            .unwrap_or(true)
+    } else {
+        true
+    };
+
+    if !cfg.force && hht_data_present && roi_fingerprint_unchanged {
+        debug!(
+            task_name = task_name,
+            group = name,
+            "HHT already computed, skipping"
+        );
+        return Ok(());
     }
 
     let modes_ds = mvmd_sub.dataset("modes")?;
@@ -368,8 +362,8 @@ fn process_mvmd_modes_group(
     let hht_duration_ms = hht_start.elapsed().as_millis();
 
     let write_start = Instant::now();
-    let dest = ensure_path(hht_parent, name, cfg.force)?;
-    write_hht(cfg, &dest, &result, cfg.force)?;
+    let dest = ensure_path(hht_parent, name, cfg.force || !roi_fingerprint_unchanged)?;
+    write_hht(cfg, &dest, &result, cfg.force || !roi_fingerprint_unchanged)?;
     propagate_roi_indices(&mvmd_sub, &dest)?;
     if is_roi {
         propagate_roi_attrs(&mvmd_sub, &dest)?;

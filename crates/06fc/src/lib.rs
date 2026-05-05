@@ -377,12 +377,14 @@ fn fc_for_mvmd_subgroup(
         check_roi_fingerprint(&src, expected)?;
     }
 
-    if !force && fc_parent.group(name).is_ok() {
+    let existing_dest = fc_parent.group(name).ok();
+    let roi_fingerprint_unchanged = match (roi_fingerprint, existing_dest.as_ref()) {
+        (Some(expected), Some(g)) => check_roi_fingerprint(g, expected).is_ok(),
+        _ => true,
+    };
+
+    if !force && existing_dest.is_some() && roi_fingerprint_unchanged {
         if subgroup_complete(fc_parent, name, "n_modes") {
-            if let Some(expected) = roi_fingerprint {
-                let existing = fc_parent.group(name)?;
-                check_roi_fingerprint(&existing, expected)?;
-            }
             debug!(
                 task_name = task_name,
                 group = name,
@@ -400,7 +402,7 @@ fn fc_for_mvmd_subgroup(
 
     let modes = read_modes_3d(&src)?;
     let cfreqs = read_center_frequencies(&src)?;
-    let dest = open_or_create_group(fc_parent, name, force)?;
+    let dest = open_or_create_group(fc_parent, name, force || !roi_fingerprint_unchanged)?;
 
     let t0 = Instant::now();
     let per_mode_fz = process_mvmd_modes(&dest, &modes, &cfreqs, force)?;
