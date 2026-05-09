@@ -32,7 +32,7 @@ fn write_sorted<P: AsRef<std::path::Path>>(path: P, df: &DataFrame) -> Result<()
             },
         )
         .collect()?;
-    polars_csv::write_dataframe(path, &sorted)?;
+    polars_csv::write_tsv(path, &sorted)?;
     Ok(())
 }
 
@@ -96,8 +96,8 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     let filter_output_dir = &cfg.subject_filter_dir;
     let csv_output_dir = &cfg.csv_output_dir;
 
-    fs::create_dir_all(&filter_output_dir)?;
-    fs::create_dir_all(&csv_output_dir)?;
+    fs::create_dir_all(filter_output_dir)?;
+    fs::create_dir_all(csv_output_dir)?;
 
     // Check demos file is available
     let demos_path = dataset_dir.join("phenotype").join("demos.tsv");
@@ -123,7 +123,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     let demos_path = demos_path.to_str().expect("File path could not be parsed"); // shadowing
 
     // Available demographics
-    let demos_df = LazyCsvReader::new(PlPath::from_str(demos_path))
+    let _demos_df = LazyCsvReader::new(PlPath::from_str(demos_path))
         .with_separator(b',')
         .with_has_header(true)
         .with_skip_rows(1) // Skip the garbage first row, treat row 2 as headers
@@ -241,7 +241,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         .collect()?;
 
     // Available SHAPS subjects
-    let shaps_df = shaps_valid_df
+    let _shaps_df = shaps_valid_df
         .clone()
         .lazy()
         .select([col("subjectkey")])
@@ -276,7 +276,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     // )?;
 
     // Low-anhedonic subjects: computed scores are 3–14
-    let shaps_low_anhedonic_df = shaps_valid_df
+    let _shaps_low_anhedonic_df = shaps_valid_df
         .clone()
         .lazy()
         .filter(
@@ -293,7 +293,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     // )?;
 
     // High-anhedonic subjects: computed scores are 3–14
-    let shaps_high_anhedonic_df = shaps_valid_df
+    let _shaps_high_anhedonic_df = shaps_valid_df
         .lazy()
         .filter(col("shaps_computed_total").gt_eq(lit(9)))
         .select([col("subjectkey")])
@@ -344,7 +344,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         anticipatory_cols
             .iter()
             .chain(consummatory_cols.iter())
-            .map(|c| col(c)),
+            .map(col),
     );
 
     let teps_valid_df = LazyCsvReader::new(PlPath::from_str(teps_path))
@@ -357,7 +357,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         .collect()?;
 
     // Available TEPS subjects
-    let teps_df = teps_valid_df
+    let _teps_df = teps_valid_df
         .clone()
         .lazy()
         .select([col("subjectkey")])
@@ -506,7 +506,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                 continue;
             }
 
-            let subjectkey = BidsSubjectId::parse(&*dir_name_str).to_subjectkey();
+            let subjectkey = BidsSubjectId::parse(dir_name_str.as_ref()).to_subjectkey();
 
             let subject_path = entry.path();
             let anat_path = subject_path.join("anat");
@@ -539,7 +539,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         subjects_with_hammer_task.len()
     );
 
-    let subjects_with_bids_data_df = DataFrame::new(vec![Column::new(
+    let _subjects_with_bids_data_df = DataFrame::new(vec![Column::new(
         "subjectkey".into(),
         subjects_with_bids_data,
     )])?;
@@ -587,11 +587,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             None,
         )?;
 
-    // write_sorted(
-    //     filter_output_dir.join("healthy_controls_without_raw_data.csv"),
-    //     &healthy_controls_df,
-    // )?;
-
     let healthy_controls_df = healthy_controls_df.join(
         &subjects_with_hammer_task_df,
         ["subjectkey"],
@@ -600,11 +595,19 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         None,
     )?;
 
-    write_sorted(filter_output_dir.join("controls.csv"), &healthy_controls_df)?;
     write_sorted(
-        csv_output_dir.join("crate-00_filter-controls.csv"),
+        csv_output_dir.join("desc-controls_subjects.tsv"),
         &healthy_controls_df,
     )?;
+    write_sorted(
+        filter_output_dir.join("desc-controls_subjects.tsv"),
+        &healthy_controls_df,
+    )?;
+
+    // write_sorted(
+    //     filter_output_dir.join("healthy_controls_without_raw_data.csv"),
+    //     &healthy_controls_df,
+    // )?;
 
     // Major Depressive Disorder
     let mdd_df = primary_mdd_df
@@ -620,7 +623,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         .drop(cols(["subjectkey_right"]))
         .collect()?;
 
-    // write_sorted(filter_output_dir.join("mdd.csv"), &mdd_df)?;
+    write_sorted(csv_output_dir.join("desc-mdd_subjects.tsv"), &mdd_df)?;
 
     // All anhedonic subjects: union of SHAPS anhedonic, TEPS-ANT anhedonic, TEPS-CON anhedonic
     let anhedonic_df = shaps_anhedonic_df
@@ -661,9 +664,12 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         None,
     )?;
 
-    write_sorted(filter_output_dir.join("anhedonic.csv"), &anhedonic_df)?;
     write_sorted(
-        csv_output_dir.join("crate-00_filter-anhedonic.csv"),
+        filter_output_dir.join("desc-anhedonic_subjects.tsv"),
+        &anhedonic_df,
+    )?;
+    write_sorted(
+        csv_output_dir.join("desc-anhedonic_subjects.tsv"),
         &anhedonic_df,
     )?;
 

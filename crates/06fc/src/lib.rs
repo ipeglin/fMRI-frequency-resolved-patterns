@@ -241,7 +241,7 @@ fn process_mvmd_modes(
     let n_modes = modes.shape()[0];
     let mut fisher_per_mode = Vec::with_capacity(n_modes);
 
-    for k in 0..n_modes {
+    for (k, center_freq) in center_frequencies.iter().enumerate().take(n_modes) {
         let mode_2d = modes.index_axis(Axis(0), k).to_owned();
 
         let pearson = pearson_matrix(&mode_2d);
@@ -253,7 +253,7 @@ fn process_mvmd_modes(
             &pearson,
             &[
                 H5Attr::u32("mode_index", k as u32),
-                H5Attr::f64("center_frequency_hz", center_frequencies[k]),
+                H5Attr::f64("center_frequency_hz", *center_freq),
             ],
         )?;
 
@@ -348,7 +348,7 @@ fn process_cwt_scalogram(
 fn subgroup_complete(parent: &hdf5::Group, name: &str, sentinel_attr: &str) -> bool {
     parent
         .group(name)
-        .map_or(false, |g| g.attr(sentinel_attr).is_ok())
+        .is_ok_and(|g| g.attr(sentinel_attr).is_ok())
 }
 
 /// FC for one MVMD subgroup (e.g. `/mvmd/full_run_raw` or `/mvmd/blocks_raw/block_X`).
@@ -651,17 +651,17 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                 match task_name {
                     "restAP" => {
                         // CWT full-run scalogram on all channels
-                        if let Ok(cwt_root) = h5_file.group("03cwt") {
-                            if let Ok(ds) = cwt_root.dataset("full_run_std") {
-                                let fc_cwt = open_or_create_group(&fc_group, "cwt", false)?;
-                                fc_for_cwt_dataset(
-                                    &ds,
-                                    &fc_cwt,
-                                    "full_run_std",
-                                    task_name,
-                                    cfg.force,
-                                )?;
-                            }
+                        if let Ok(cwt_root) = h5_file.group("03cwt")
+                            && let Ok(ds) = cwt_root.dataset("full_run_std")
+                        {
+                            let fc_cwt = open_or_create_group(&fc_group, "cwt", false)?;
+                            fc_for_cwt_dataset(
+                                &ds,
+                                &fc_cwt,
+                                "full_run_std",
+                                task_name,
+                                cfg.force,
+                            )?;
                         }
                         if let Ok(mvmd_root) = h5_file.group("04mvmd") {
                             let fc_mvmd = open_or_create_group(&fc_group, "mvmd", false)?;
@@ -688,17 +688,17 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     }
                     "hammerAP" => {
                         // CWT block scalograms on all channels
-                        if let Ok(cwt_root) = h5_file.group("03cwt") {
-                            if let Ok(blocks_std) = cwt_root.group("blocks_std") {
-                                let fc_cwt = open_or_create_group(&fc_group, "cwt", false)?;
-                                fc_for_cwt_blocks(
-                                    &blocks_std,
-                                    &fc_cwt,
-                                    "blocks_std",
-                                    task_name,
-                                    cfg.force,
-                                )?;
-                            }
+                        if let Ok(cwt_root) = h5_file.group("03cwt")
+                            && let Ok(blocks_std) = cwt_root.group("blocks_std")
+                        {
+                            let fc_cwt = open_or_create_group(&fc_group, "cwt", false)?;
+                            fc_for_cwt_blocks(
+                                &blocks_std,
+                                &fc_cwt,
+                                "blocks_std",
+                                task_name,
+                                cfg.force,
+                            )?;
                         }
                         if let Ok(mvmd_root) = h5_file.group("04mvmd") {
                             let fc_mvmd = open_or_create_group(&fc_group, "mvmd", false)?;

@@ -22,6 +22,7 @@ pub struct LabelsMasker {
     signal_config: MaskerSignalConfig,
 }
 
+#[allow(dead_code)]
 impl LabelsMasker {
     /// Load and prepare the atlas
     pub fn new(atlas_path: &PathBuf) -> Result<Self> {
@@ -140,7 +141,7 @@ impl LabelsMasker {
         }
 
         // Resample atlas to BOLD space
-        let needs_resampling = self.labels_volume.shape() != &[bold_sx, bold_sy, bold_sz];
+        let needs_resampling = self.labels_volume.shape() != [bold_sx, bold_sy, bold_sz];
 
         debug!(
             needs_resampling = needs_resampling,
@@ -239,7 +240,7 @@ impl LabelsMasker {
         );
 
         // If dimensions already match, return as is
-        if self.labels_volume.shape() == &[target_shape.0, target_shape.1, target_shape.2] {
+        if self.labels_volume.shape() == [target_shape.0, target_shape.1, target_shape.2] {
             trace!(
                 target_shape = ?target_shape,
                 "dimensions match, skipping resampling"

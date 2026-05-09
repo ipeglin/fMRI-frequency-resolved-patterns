@@ -83,7 +83,7 @@ fn cwt_scalogram(cfg: &AppConfig, signal: &Array2<f64>) -> (Vec<f64>, [usize; 3]
                 channel_slice,
                 |points, scale| complex_morlet(points, 6.0, 1.0, 0.0, scale),
                 &scales,
-                Some(false),
+                Some(true),
             )
             .expect("scalogram computation should succeed");
 
@@ -175,7 +175,16 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             let h5_file = hdf5::File::open_rw(&path)?;
 
             let fr_dataset = format!("{CWT_CRATE_GROUP}/{FULL_RUN_DATASET}");
-            let already_done = !cfg.force && path_exists(&h5_file, &fr_dataset);
+            let already_done = !cfg.force && path_exists(&h5_file, &fr_dataset) && {
+                // Treat data as stale when normalization mode changed (attr absent → not normalized)
+                h5_file
+                    .dataset(&fr_dataset)
+                    .ok()
+                    .and_then(|ds| ds.attr("normalized").ok())
+                    .and_then(|a| a.read_scalar::<u32>().ok())
+                    .map(|v| v != 0)
+                    .unwrap_or(false)
+            };
             if already_done {
                 info!(
                     task_name = task_name,
@@ -233,6 +242,13 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
 
             let fr_ds = prepare_dataset::<f32>(&cwt_group, FULL_RUN_DATASET, &shape)?;
             fr_ds.write_raw(&scalogram_data)?;
+            write_attrs(
+                &fr_ds,
+                &[
+                    H5Attr::u32("normalized", 1),
+                    H5Attr::string("normalize_method", "max_divide"),
+                ],
+            )?;
 
             let write_duration_ms = write_start.elapsed().as_millis();
 
@@ -274,8 +290,8 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                 "opening output group"
             );
 
-            let trial_block_dataset = format!("02fmri_segment_trials/blocks_std");
-            let missing_trial_blocks = !path_exists(&h5_file, &trial_block_dataset);
+            let trial_block_dataset = "02fmri_segment_trials/blocks_std";
+            let missing_trial_blocks = !path_exists(&h5_file, trial_block_dataset);
             if missing_trial_blocks {
                 warn!(
                     task_name = task_name,
@@ -345,9 +361,19 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                         "starting CWT decomposition"
                     );
 
-                    // Check if output dataset already exists
+                    // Check if output dataset already exists and was normalized
                     let block_already_done = !cfg.force
-                        && path_exists(&cwt_blocks_group, &format!("{trial_type}/{block_name}"));
+                        && path_exists(&cwt_blocks_group, &format!("{trial_type}/{block_name}"))
+                        && {
+                            let ds_path = format!("{trial_type}/{block_name}");
+                            cwt_blocks_group
+                                .dataset(&ds_path)
+                                .ok()
+                                .and_then(|ds| ds.attr("normalized").ok())
+                                .and_then(|a| a.read_scalar::<u32>().ok())
+                                .map(|v| v != 0)
+                                .unwrap_or(false)
+                        };
                     if block_already_done {
                         debug!(
                             task_name = task_name,
@@ -427,7 +453,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                         let _ = trial_group.unlink(block_name);
                     }
 
-                    let output_ds = prepare_dataset::<f32>(&trial_group, &block_name, &shape)
+                    let output_ds = prepare_dataset::<f32>(&trial_group, block_name, &shape)
                         .with_context(|| {
                             format!(
                                 "failed to create output dataset {trial_group:?}/{block_name:?}"
@@ -435,7 +461,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                         })?;
 
                     // Write the raw array data (assumes scalogram_data is C-contiguous standard layout)
-                    let data_view = ndarray::ArrayView::from_shape(shape.clone(), &scalogram_data)
+                    let data_view = ndarray::ArrayView::from_shape(shape, &scalogram_data)
                         .expect("Failed to reshape flat scalogram data into ND-array view");
                     debug!(
                         dataset_path = %output_block_dataset_path,
@@ -444,7 +470,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     output_ds.write(&data_view)?;
 
                     // Write metadata attributes to the new CWT dataset
-                    // let trial_type_val: VarLenUnicode = trial_type.parse()?;
                     let metadata = vec![
                         H5Attr {
                             name: "trial_type".to_string(),
@@ -458,6 +483,8 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                             name: "block_end_s".to_string(),
                             value: H5AttrValue::F64(block_end_s),
                         },
+                        H5Attr::u32("normalized", 1),
+                        H5Attr::string("normalize_method", "max_divide"),
                     ];
 
                     write_attrs(&output_ds, &metadata)?;

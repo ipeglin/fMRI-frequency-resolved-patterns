@@ -4,8 +4,7 @@ use polars::prelude::*;
 use std::{
     collections::BTreeMap,
     fs,
-    io::Write,
-    path::{Path, PathBuf},
+    path::PathBuf,
     time::Instant,
 };
 use tracing::{info, warn};
@@ -31,7 +30,6 @@ struct BlockTimeseries {
     trial_type: String,
     onset_s: f64,
     block_end_s: f64,
-    full_run_raw: Array2<f32>,
     full_run_std: Array2<f32>,
 }
 
@@ -125,7 +123,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             let mut bids = BidsFilename::parse(h5_name).keep(&["sub", "task", "run"]);
             bids.suffix = None;
             bids.extension = None;
-            let event_file_base = bids.to_stem();
+            let _event_file_base = bids.to_stem();
 
             let mut events_bids = bids.clone();
             events_bids.suffix = Some("events".to_string());
@@ -179,10 +177,8 @@ fn get_timeseries_per_event_block(
     // let cortical: Array2<f32> = h5_file.dataset("cortical_raw")?.read_2d()?;
     // let subcortical: Array2<f32> = h5_file.dataset("subcortical_raw")?.read_2d()?;
     let parc = h5_file.group("01fmri_parcellation")?;
-    let full_run_raw: Array2<f32> = parc.dataset("full_run_raw")?.read_2d()?;
-    let n_timepoints = full_run_raw.shape()[1];
-
     let full_run_std: Array2<f32> = parc.dataset("full_run_std")?.read_2d()?;
+    let n_timepoints = full_run_std.shape()[1];
 
     let block_ids = event_blocks.column("block_id")?.i32()?;
     let trial_types = event_blocks.column("trial_type")?.str()?;
@@ -227,7 +223,6 @@ fn get_timeseries_per_event_block(
 
         // let cortical_block = cortical.slice(s![.., start_idx..end_idx]).to_owned();
         // let subcortical_block = subcortical.slice(s![.., start_idx..end_idx]).to_owned();
-        let full_run_raw_block = full_run_raw.slice(s![.., start_idx..end_idx]).to_owned();
         // let cortical_std_block = cortical_std_full
         //     .as_ref()
         //     .map(|a| a.slice(s![.., start_idx..end_idx]).to_owned());
@@ -241,7 +236,6 @@ fn get_timeseries_per_event_block(
             trial_type,
             onset_s: onset,
             block_end_s: block_end,
-            full_run_raw: full_run_raw_block,
             full_run_std: full_run_std_block,
         });
     }
@@ -259,45 +253,13 @@ fn write_blocks_h5(h5_file: &hdf5::File, blocks: &[BlockTimeseries], force: bool
     };
 
     let segment_root = get_or_create_group(h5_file, "02fmri_segment_trials")?;
-    let raw_blocks_group = get_or_create_group(&segment_root, "blocks_raw")?;
     let std_blocks_group = get_or_create_group(&segment_root, "blocks_std")?;
 
     for block in blocks {
         let ds_name = format!("block_{}", block.block_id);
 
-        // 1. Get or create the trial_type sub-groups (e.g., "face" or "shape")
-        let trial_group_raw = get_or_create_group(&raw_blocks_group, &block.trial_type)?;
+        // Get or create the trial_type sub-group (e.g., "face" or "shape")
         let trial_group_std = get_or_create_group(&std_blocks_group, &block.trial_type)?;
-
-        // --- raw blocks ---
-        let skip_raw = !force && trial_group_raw.dataset(&ds_name).is_ok();
-        if !skip_raw {
-            if force {
-                let _ = trial_group_raw.unlink(&ds_name);
-            }
-
-            let raw_shape = block.full_run_raw.shape();
-            let raw_ds = trial_group_raw
-                .new_dataset::<f32>()
-                .shape(raw_shape)
-                .create(ds_name.as_str())?; // dataset "block_X"
-
-            raw_ds.write_raw(block.full_run_raw.as_slice().unwrap())?;
-
-            // Attach attributes DIRECTLY to the dataset
-            raw_ds
-                .new_attr::<f64>()
-                .shape(())
-                .create("onset_s")?
-                .as_writer()
-                .write_scalar(&block.onset_s)?;
-            raw_ds
-                .new_attr::<f64>()
-                .shape(())
-                .create("block_end_s")?
-                .as_writer()
-                .write_scalar(&block.block_end_s)?;
-        }
 
         // --- standardized blocks ---
         let skip_std = !force && trial_group_std.dataset(&ds_name).is_ok();
