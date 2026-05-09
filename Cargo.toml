@@ -7,8 +7,7 @@ members = [
   "crates/01fmri_parcellation",
   "crates/02fmri_segment_trials",
   "crates/03cwt",
-  "crates/04mvmd",
-  "crates/05hilbert",
+  "crates/04hht",
   "crates/06fc",
   "crates/07feature_extraction",
   "crates/08classification",
@@ -30,3 +29,7 @@ thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 toml = "0.8"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1

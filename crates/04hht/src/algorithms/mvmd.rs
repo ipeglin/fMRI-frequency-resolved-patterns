@@ -1,12 +1,54 @@
 use super::admm::{ADMMConfig, ADMMOptimizer};
-use ndarray::{Array1, Array2, Array3};
+use crate::algorithms::power_iter::{power_iteration_smoothed_coherence, smoothed_auto_spectra};
+use ndarray::{s, Array1, Array2, Array3, parallel::prelude::*};
 use polars::prelude::*;
-use rayon::prelude::*;
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
+use rand_distr::{Distribution, Normal};
 use rustfft::{FftPlanner, num_complex::Complex64};
 use tracing::{debug, info, trace, warn};
 
+/// Algorithm variant: classic MVMD or Noise-Assisted MVMD (NA-MVMD).
+///
+/// NA-MVMD appends WGN channels to the input and replaces the spectral-centroid
+/// frequency update with a Generalized Cross-Spectrum (GCS) centroid computed via
+/// power iteration on the frequency-smoothed coherence matrix.
+#[derive(Debug, Clone, Default)]
+pub enum MvmdVariant {
+    /// Standard MVMD — no noise injection, spectral-centroid frequency update.
+    #[default]
+    Classic,
+    /// NA-MVMD — appends WGN channels and uses GCS frequency update.
+    NoiseAssisted {
+        /// Number of WGN channels to append (N).
+        noise_channels: usize,
+        /// Noise std relative to the mean per-channel signal std.
+        noise_std_ratio: f64,
+        /// Seed for ChaCha8Rng — ensures deterministic noise.
+        seed: u64,
+        /// Rectangular smoothing window size (odd, ≥1) for the cross-spectral estimator.
+        gcs_smoothing_window: usize,
+        /// Power-iteration iteration cap per (mode, frequency bin).
+        gcs_power_iters: usize,
+        /// Relative eigenvalue-change tolerance for power-iteration early exit.
+        gcs_power_tol: f64,
+    },
+}
+
+/// Sample standard deviation of a signal channel (unbiased, ddof=1). Returns 1.0 for empty/single-sample.
+fn channel_std(ch: &[f64]) -> f64 {
+    let n = ch.len();
+    if n < 2 {
+        return 1.0;
+    }
+    let mean = ch.iter().sum::<f64>() / n as f64;
+    let var = ch.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n - 1) as f64;
+    var.sqrt()
+}
+
 /// Initialization method for center frequencies in MVMD/VMD algorithms.
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub enum FrequencyInit {
     /// All omegas start at 0
     #[default]
@@ -23,6 +65,7 @@ pub enum FrequencyInit {
 ///
 /// The DataFrame has channels as columns and time points as rows,
 /// compatible with `ConnectivityMatrix::new()` for computing functional connectivity.
+#[allow(dead_code)]
 pub struct ModeData {
     /// Mode index (0-indexed, ordered by frequency)
     pub mode_index: usize,
@@ -34,18 +77,18 @@ pub struct ModeData {
 
 /// Result of MVMD decomposition.
 pub struct MVMDResult {
+    #[allow(dead_code)]
     /// Labels across all channels
     pub channels: Vec<String>,
     /// Decomposed modes with shape (K modes x C channels x T time-points)
     pub modes: Array3<f64>,
-    /// Estimated mode center-frequencies over iterations (iter x K)
-    pub frequency_traces: Array2<f64>,
     /// Final center frequencies for each mode (K,)
     pub center_frequencies: Array1<f64>,
     /// Number of iterations until convergence
     pub num_iterations: u32,
 }
 
+#[allow(dead_code)]
 impl MVMDResult {
     /// Return each mode as a `ModeData` containing the time series DataFrame and center frequency.
     ///
@@ -134,7 +177,7 @@ impl MVMDResult {
     /// If multiple modes map to the same bin, they are summed.
     pub fn remap_to_grid(&self, f_min: f64, f_max: f64, n_bins: usize) -> Array3<f64> {
         let shape = self.modes.shape();
-        let num_modes = shape[0];
+        let _num_modes = shape[0];
         let num_channels = shape[1];
         let num_tpoints = shape[2];
 
@@ -146,10 +189,7 @@ impl MVMDResult {
             std::collections::HashMap::new();
 
         for (k_idx, bin_idx, _) in mappings {
-            bin_assignments
-                .entry(bin_idx)
-                .or_insert_with(Vec::new)
-                .push(k_idx);
+            bin_assignments.entry(bin_idx).or_default().push(k_idx);
 
             for c in 0..num_channels {
                 for t in 0..num_tpoints {
@@ -186,6 +226,7 @@ impl MVMDResult {
 /// Implementation based on:
 /// N. Rehman and H. Aftab (2019) "Multivariate Variational Mode Decomposition",
 /// IEEE Transactions on Signal Processing
+#[allow(clippy::upper_case_acronyms)]
 pub struct MVMD {
     /// Input signal data (channels x time-points)
     data: Vec<Vec<f64>>,
@@ -203,6 +244,8 @@ pub struct MVMD {
     sampling_rate: f64,
     /// ADMM configuration for dual ascent
     admm_config: ADMMConfig,
+    /// Algorithm variant (Classic or NoiseAssisted)
+    variant: MvmdVariant,
 }
 
 impl ADMMOptimizer for MVMD {
@@ -215,6 +258,7 @@ impl ADMMOptimizer for MVMD {
     }
 }
 
+#[allow(dead_code)]
 impl MVMD {
     /// Create a new MVMD instance from a DataFrame.
     ///
@@ -263,6 +307,7 @@ impl MVMD {
             init: FrequencyInit::default(),
             sampling_rate,
             admm_config: ADMMConfig::default(),
+            variant: MvmdVariant::Classic,
         })
     }
 
@@ -283,6 +328,7 @@ impl MVMD {
             init: FrequencyInit::default(),
             sampling_rate: 1.25,
             admm_config: ADMMConfig::default(),
+            variant: MvmdVariant::Classic,
         }
     }
 
@@ -301,6 +347,12 @@ impl MVMD {
     /// Set the ADMM configuration
     pub fn with_admm_config(mut self, config: ADMMConfig) -> Self {
         self.admm_config = config;
+        self
+    }
+
+    /// Set the algorithm variant (Classic or NoiseAssisted).
+    pub fn with_variant(mut self, variant: MvmdVariant) -> Self {
+        self.variant = variant;
         self
     }
 
@@ -329,15 +381,20 @@ impl MVMD {
     pub fn decompose(&self, num_modes: usize) -> MVMDResult {
         let num_fpoints = self.num_tpoints + 1;
 
+        // Build augmented data (original channels + WGN) for NA-MVMD, or borrow as-is for Classic.
+        let (working_data, c_aug, gcs_params) = self.build_augmented_data();
+
         info!(
             num_modes = num_modes,
             num_channels = self.num_channels,
+            c_aug,
             num_tpoints = self.num_tpoints,
             num_fpoints = num_fpoints,
             alpha = self.alpha,
             max_iterations = self.admm_config.max_iterations,
             tolerance = self.admm_config.tolerance,
             tau = self.admm_config.tau,
+            na_mvmd = gcs_params.is_some(),
             init = ?self.init,
             "starting MVMD decomposition"
         );
@@ -362,27 +419,48 @@ impl MVMD {
             "initialized center frequencies"
         );
 
-        // Transform signal to frequency domain
+        // Transform (augmented) signal to frequency domain
         debug!("transforming signal to frequency domain");
-        let signal_hat = self.to_freq_domain();
-        debug!("FFT completed for all channels");
+        let signal_hat = Self::to_freq_domain_from_data(&working_data, self.num_tpoints);
+        debug!("FFT completed for {} channels", c_aug);
 
-        // Initialize modes in frequency domain: (K modes x C channels x F freq-points)
-        let mut modes_hat: Vec<Vec<Vec<Complex64>>> =
-            vec![vec![vec![Complex64::new(0.0, 0.0); num_fpoints]; self.num_channels]; num_modes];
+        // Initialize modes in frequency domain: Vec of K Array2<[c_aug, F]>
+        let mut modes_hat: Vec<Array2<Complex64>> =
+            (0..num_modes)
+                .map(|_| Array2::zeros((c_aug, num_fpoints)))
+                .collect();
 
         // Dual variables (lambda): only keep current and next iteration (memory optimization)
-        let mut lambda_current: Vec<Vec<Complex64>> =
-            vec![vec![Complex64::new(0.0, 0.0); num_fpoints]; self.num_channels];
-        let mut lambda_next: Vec<Vec<Complex64>> =
-            vec![vec![Complex64::new(0.0, 0.0); num_fpoints]; self.num_channels];
+        let mut lambda_current: Array2<Complex64> = Array2::zeros((c_aug, num_fpoints));
+        let mut lambda_next: Array2<Complex64> = Array2::zeros((c_aug, num_fpoints));
+
+        // Deterministic init vector for power iteration (reused across all (k, f) calls).
+        // Seeded from the noise seed (or a fixed constant for Classic).
+        let pi_seed = match &self.variant {
+            MvmdVariant::NoiseAssisted { seed, .. } => *seed ^ 0xDEAD_BEEF,
+            MvmdVariant::Classic => 0xDEAD_BEEF,
+        };
+        let pi_init: Vec<Complex64> = {
+            let mut rng = ChaCha8Rng::seed_from_u64(pi_seed);
+            let norm_d = Normal::new(0.0_f64, 1.0_f64).unwrap();
+            let mut v: Vec<Complex64> = (0..c_aug)
+                .map(|_| Complex64::new(norm_d.sample(&mut rng), norm_d.sample(&mut rng)))
+                .collect();
+            let norm: f64 = v
+                .iter()
+                .map(|z| z.norm_sqr())
+                .sum::<f64>()
+                .sqrt()
+                .max(1e-30);
+            v.iter_mut().for_each(|z| *z = z.scale(1.0 / norm));
+            v
+        };
 
         let mut residual_diff = self.admm_config.tolerance + f64::EPSILON;
         let mut n: usize = 0;
 
         // Pre-compute modes_sum once, then update incrementally
-        let mut modes_sum: Vec<Vec<Complex64>> =
-            vec![vec![Complex64::new(0.0, 0.0); num_fpoints]; self.num_channels];
+        let mut modes_sum: Array2<Complex64> = Array2::zeros((c_aug, num_fpoints));
 
         // Main MVMD iteration loop
         while n < self.admm_config.max_iterations as usize
@@ -397,15 +475,15 @@ impl MVMD {
 
                 // Update mode: modes_hat[k] = (signal - sum(other_modes) - 0.5*lambda) / (1 + alpha*(f - omega)^2)
                 // sum(other_modes) = modes_sum - modes_hat[k]
-                // Parallel over channels: each channel's (modes_hat[k][c], modes_sum[c]) slab
-                // is disjoint, and residual_sqr contributions sum via rayon reduce.
+                // Parallel over channels via ndarray Zip; residual contributions collected into Array1.
                 let alpha = self.alpha;
-                let residual_delta: f64 = modes_hat[k]
-                    .par_iter_mut()
-                    .zip(modes_sum.par_iter_mut())
-                    .zip(signal_hat.par_iter())
-                    .zip(lambda_current.par_iter())
-                    .map(|(((mh_c, ms_c), sh_c), lam_c)| {
+                let mut residual_arr = ndarray::Array1::<f64>::zeros(c_aug);
+                ndarray::Zip::from(modes_hat[k].rows_mut())
+                    .and(modes_sum.rows_mut())
+                    .and(signal_hat.rows())
+                    .and(lambda_current.rows())
+                    .and(residual_arr.view_mut())
+                    .par_for_each(|mut mh_c, mut ms_c, sh_c, lam_c, res| {
                         let mut local: f64 = 0.0;
                         for f in 0..num_fpoints {
                             let old_val = mh_c[f];
@@ -416,45 +494,87 @@ impl MVMD {
                             let new_val = numerator.scale(1.0 / denominator);
                             mh_c[f] = new_val;
                             ms_c[f] = ms_c[f] - old_val + new_val;
-                            let diff = new_val - old_val;
-                            local += diff.norm_sqr();
+                            local += (new_val - old_val).norm_sqr();
                         }
-                        local
-                    })
-                    .sum();
-                residual_diff += residual_delta;
+                        *res = local;
+                    });
+                residual_diff += residual_arr.sum();
 
-                // Update center frequency (spectral centroid). Reduce over channels
-                // returning (weighted_sum, total_power).
-                let (weighted_sum, total_power): (f64, f64) = modes_hat[k]
-                    .par_iter()
-                    .map(|mh_c| {
-                        let mut ws: f64 = 0.0;
-                        let mut tp: f64 = 0.0;
-                        for f in 0..num_fpoints {
-                            let power = mh_c[f].norm_sqr();
-                            ws += power * f_points[f];
-                            tp += power;
-                        }
-                        (ws, tp)
-                    })
-                    .reduce(|| (0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
+                // Update center frequency.
+                // Classic: spectral centroid averaged over channels.
+                // NA-MVMD: GCS centroid from frequency-smoothed coherence matrix eigenvalue.
+                omega_next[k] = if let Some((gcs_window, gcs_pi_iters, gcs_pi_tol)) = gcs_params {
+                    // GCS update: Σ_z(ω) frequency-smoothed coherence matrix via power iteration.
+                    // s_diag[c][f] = smoothed |u_c(f)|^2 for normalisation.
+                    let s_diag = smoothed_auto_spectra(modes_hat[k].view(), gcs_window);
+                    let denom = (c_aug as f64 - 1.0).max(1.0);
 
-                omega_next[k] = if total_power > 0.0 {
-                    weighted_sum / total_power
+                    let (weighted_sum, total_gamma): (f64, f64) = (0..num_fpoints)
+                        .into_par_iter()
+                        .map_init(
+                            || {
+                                (
+                                    vec![Complex64::new(0.0, 0.0); c_aug],
+                                    vec![Complex64::new(0.0, 0.0); c_aug],
+                                    vec![Complex64::new(0.0, 0.0); c_aug],
+                                )
+                            },
+                            |(x, y, z_buf), f| {
+                                let lambda_max = power_iteration_smoothed_coherence(
+                                    modes_hat[k].view(),
+                                    &s_diag,
+                                    f,
+                                    gcs_window,
+                                    gcs_pi_iters,
+                                    gcs_pi_tol,
+                                    &pi_init,
+                                    x,
+                                    y,
+                                    z_buf,
+                                );
+                                let gamma = ((lambda_max - 1.0).max(0.0)) / denom;
+                                (gamma * f_points[f], gamma)
+                            },
+                        )
+                        .reduce(|| (0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
+
+                    if total_gamma > 0.0 {
+                        weighted_sum / total_gamma
+                    } else {
+                        omega_k
+                    }
                 } else {
-                    omega_k
+                    // Classic spectral centroid averaged over all (augmented) channels.
+                    let (weighted_sum, total_power): (f64, f64) = modes_hat[k]
+                        .outer_iter()
+                        .into_par_iter()
+                        .map(|mh_c| {
+                            let mut ws: f64 = 0.0;
+                            let mut tp: f64 = 0.0;
+                            for f in 0..num_fpoints {
+                                let power = mh_c[f].norm_sqr();
+                                ws += power * f_points[f];
+                                tp += power;
+                            }
+                            (ws, tp)
+                        })
+                        .reduce(|| (0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
+
+                    if total_power > 0.0 {
+                        weighted_sum / total_power
+                    } else {
+                        omega_k
+                    }
                 };
             }
 
             // Dual ascent: lambda = lambda + tau * (sum(modes) - signal). Independent per c.
             let tau = self.admm_config.tau;
-            lambda_next
-                .par_iter_mut()
-                .zip(lambda_current.par_iter())
-                .zip(modes_sum.par_iter())
-                .zip(signal_hat.par_iter())
-                .for_each(|(((ln_c, lc_c), ms_c), sh_c)| {
+            ndarray::Zip::from(lambda_next.rows_mut())
+                .and(lambda_current.rows())
+                .and(modes_sum.rows())
+                .and(signal_hat.rows())
+                .par_for_each(|mut ln_c, lc_c, ms_c, sh_c| {
                     for f in 0..num_fpoints {
                         let residual = ms_c[f] - sh_c[f];
                         ln_c[f] = lc_c[f] + residual.scale(tau);
@@ -472,7 +592,7 @@ impl MVMD {
             residual_diff /= self.num_tpoints as f64;
 
             // Log progress at INFO level so it's visible, every 10 iterations
-            if n % 100 == 0 || n == 1 {
+            if n.is_multiple_of(100) || n == 1 {
                 debug!(
                     iteration = n,
                     max_iterations = self.admm_config.max_iterations,
@@ -517,12 +637,14 @@ impl MVMD {
             }
         }
 
-        // Reconstruct time-domain modes and reorder
+        // Reconstruct time-domain modes and reorder.
+        // Trim noise channels (indices ≥ self.num_channels) before IFFT — they are
+        // never written to the output array.
         debug!("reconstructing time-domain modes via IFFT");
         let mut modes_vec: Vec<Vec<Vec<f64>>> = Vec::with_capacity(num_modes);
         for (i, &idx) in indices.iter().enumerate() {
             trace!(mode_idx = i, original_idx = idx, "reconstructing mode");
-            modes_vec.push(self.to_time_domain(&modes_hat[idx]));
+            modes_vec.push(self.to_time_domain(modes_hat[idx].slice(s![..self.num_channels, ..])));
         }
 
         // Convert to ndarray types
@@ -542,16 +664,8 @@ impl MVMD {
             }
         }
 
-        // frequency_traces: (iter x K)
-        let n_iters = omega_result.len();
-        let mut frequency_traces = Array2::<f64>::zeros((n_iters, num_modes));
-        for (i, row) in omega_result.iter().enumerate() {
-            for (k, &val) in row.iter().enumerate() {
-                frequency_traces[[i, k]] = val;
-            }
-        }
-
         // center_frequencies: (K,)
+        let n_iters = omega_result.len();
         let center_frequencies = if n_iters > 0 {
             Array1::from_vec(omega_result[n_iters - 1].clone())
         } else {
@@ -568,10 +682,94 @@ impl MVMD {
         MVMDResult {
             channels: self.channels.clone(),
             modes,
-            frequency_traces,
             center_frequencies,
             num_iterations: n as u32,
         }
+    }
+
+    /// Build the working data array (original channels + optional WGN), returning
+    /// `(data, c_aug, gcs_params)`. For Classic, returns a reference-counted view of
+    /// `self.data` with no allocation; for NoiseAssisted it allocates the noise channels.
+    ///
+    /// `gcs_params` is `Some((window, max_iters, tol))` for NA-MVMD, `None` for Classic.
+    #[allow(clippy::type_complexity)]
+    fn build_augmented_data(&self) -> (Vec<Vec<f64>>, usize, Option<(usize, usize, f64)>) {
+        match &self.variant {
+            MvmdVariant::Classic => (self.data.clone(), self.num_channels, None),
+            MvmdVariant::NoiseAssisted {
+                noise_channels,
+                noise_std_ratio,
+                seed,
+                gcs_smoothing_window,
+                gcs_power_iters,
+                gcs_power_tol,
+            } => {
+                let n_noise = *noise_channels;
+                let c_aug = self.num_channels + n_noise;
+
+                // Compute mean per-channel std for scaling.
+                let mean_std: f64 = if self.num_channels > 0 {
+                    let s: f64 = self.data.iter().map(|ch| channel_std(ch)).sum();
+                    s / self.num_channels as f64
+                } else {
+                    1.0
+                };
+                let noise_std = mean_std * noise_std_ratio;
+
+                let mut rng = ChaCha8Rng::seed_from_u64(*seed);
+                let dist = Normal::new(0.0_f64, noise_std.max(1e-30)).unwrap();
+
+                let mut augmented = self.data.clone();
+                for _ in 0..n_noise {
+                    let noise: Vec<f64> = (0..self.num_tpoints)
+                        .map(|_| dist.sample(&mut rng))
+                        .collect();
+                    augmented.push(noise);
+                }
+
+                (
+                    augmented,
+                    c_aug,
+                    Some((*gcs_smoothing_window, *gcs_power_iters, *gcs_power_tol)),
+                )
+            }
+        }
+    }
+
+    /// Transform a data slice (channels × time-points) to the frequency domain.
+    /// Returns Array2<Complex64> with shape [c, num_tpoints+1].
+    fn to_freq_domain_from_data(data: &[Vec<f64>], num_tpoints: usize) -> Array2<Complex64> {
+        let c = data.len();
+        let num_fpoints = num_tpoints + 1;
+        let pad_left = num_tpoints / 2;
+        let pad_right = num_tpoints - pad_left;
+        let padded_len = num_tpoints + pad_left + pad_right;
+
+        let mut planner = FftPlanner::<f64>::new();
+        let fft = planner.plan_fft_forward(padded_len);
+
+        let rows: Vec<Vec<Complex64>> = data
+            .par_iter()
+            .map(|channel_data| {
+                let mut padded: Vec<Complex64> = Vec::with_capacity(padded_len);
+                for i in (0..pad_left).rev() {
+                    let idx = i.min(num_tpoints - 1);
+                    padded.push(Complex64::new(channel_data[idx], 0.0));
+                }
+                for &val in channel_data {
+                    padded.push(Complex64::new(val, 0.0));
+                }
+                for i in 0..pad_right {
+                    let idx = (num_tpoints - 1 - i).max(0);
+                    padded.push(Complex64::new(channel_data[idx], 0.0));
+                }
+                fft.process(&mut padded);
+                padded[..num_fpoints].to_vec()
+            })
+            .collect();
+
+        let flat: Vec<Complex64> = rows.into_iter().flatten().collect();
+        Array2::from_shape_vec((c, num_fpoints), flat).expect("shape mismatch in to_freq_domain_from_data")
     }
 
     /// Initialize center frequencies based on the chosen method
@@ -604,45 +802,16 @@ impl MVMD {
         }
     }
 
-    /// Transform signal to frequency domain with symmetric padding
-    fn to_freq_domain(&self) -> Vec<Vec<Complex64>> {
-        let tpoints = self.num_tpoints;
-        let pad_left = tpoints / 2;
-        let pad_right = tpoints - pad_left;
-        let padded_len = tpoints + pad_left + pad_right;
-
-        let mut planner = FftPlanner::<f64>::new();
-        let fft = planner.plan_fft_forward(padded_len);
-
-        // Parallel over channels: rustfft's Fft is Send+Sync via Arc.
-        self.data
-            .par_iter()
-            .map(|channel_data| {
-                let mut padded: Vec<Complex64> = Vec::with_capacity(padded_len);
-
-                for i in (0..pad_left).rev() {
-                    let idx = i.min(tpoints - 1);
-                    padded.push(Complex64::new(channel_data[idx], 0.0));
-                }
-
-                for &val in channel_data {
-                    padded.push(Complex64::new(val, 0.0));
-                }
-
-                for i in 0..pad_right {
-                    let idx = (tpoints - 1 - i).max(0);
-                    padded.push(Complex64::new(channel_data[idx], 0.0));
-                }
-
-                fft.process(&mut padded);
-                padded[..tpoints + 1].to_vec()
-            })
-            .collect()
+    /// Transform signal to frequency domain with symmetric padding.
+    /// Returns Array2<Complex64> with shape [num_channels, num_tpoints+1].
+    fn to_freq_domain(&self) -> Array2<Complex64> {
+        Self::to_freq_domain_from_data(&self.data, self.num_tpoints)
     }
 
-    /// Transform frequency-domain signal back to time domain
-    fn to_time_domain(&self, signal_hat: &[Vec<Complex64>]) -> Vec<Vec<f64>> {
-        let fpoints = signal_hat[0].len();
+    /// Transform frequency-domain modes back to time domain.
+    /// `signal_hat` has shape [c_chan, fpoints] (C-contiguous rows).
+    fn to_time_domain(&self, signal_hat: ndarray::ArrayView2<Complex64>) -> Vec<Vec<f64>> {
+        let fpoints = signal_hat.ncols();
         let red_ft = fpoints - 1;
         let full_len = 2 * red_ft;
 
@@ -651,23 +820,23 @@ impl MVMD {
 
         // Parallel over channels: Fft plan is shared via Arc (Send+Sync).
         signal_hat
-            .par_iter()
+            .outer_iter()
+            .into_par_iter()
             .map(|channel_hat| {
+                let ch = channel_hat.as_slice().expect("non-contiguous row");
                 let mut full_hat: Vec<Complex64> = vec![Complex64::new(0.0, 0.0); full_len];
 
-                for i in 0..red_ft {
-                    full_hat[red_ft + i] = channel_hat[i];
-                }
+                full_hat[red_ft..(red_ft + red_ft)].copy_from_slice(&ch[..red_ft]);
 
                 for i in 1..=red_ft {
-                    full_hat[red_ft - i] = channel_hat[i].conj();
+                    full_hat[red_ft - i] = ch[i].conj();
                 }
 
                 let mut shifted: Vec<Complex64> = vec![Complex64::new(0.0, 0.0); full_len];
                 let mid = full_len / 2;
-                for i in 0..full_len {
+                for (i, val) in full_hat.iter().enumerate() {
                     let new_idx = (i + mid) % full_len;
-                    shifted[new_idx] = full_hat[i];
+                    shifted[new_idx] = *val;
                 }
 
                 ifft.process(&mut shifted);
@@ -688,13 +857,11 @@ mod tests {
 
     #[test]
     fn test_mvmd_basic() {
-        // Create a simple test signal: sum of two sinusoids
         let num_samples = 256;
         let t: Vec<f64> = (0..num_samples)
             .map(|i| i as f64 / num_samples as f64)
             .collect();
 
-        // Two channels with different frequency combinations
         let channel1: Vec<f64> = t
             .iter()
             .map(|&ti| (2.0 * PI * 5.0 * ti).sin() + 0.5 * (2.0 * PI * 20.0 * ti).sin())
@@ -712,15 +879,90 @@ mod tests {
 
         let result = mvmd.decompose(2);
 
-        // Check modes shape: (K=2, C=2, T=256)
         assert_eq!(result.modes.shape(), &[2, 2, 256]);
         assert!(result.num_iterations > 0);
         assert!(result.num_iterations <= 500);
-
-        // Check frequency_traces shape: (n_iters, K=2)
-        assert_eq!(result.frequency_traces.shape()[1], 2);
-
-        // Check center_frequencies shape: (K=2,)
         assert_eq!(result.center_frequencies.len(), 2);
+    }
+
+    #[test]
+    fn test_na_mvmd_output_shape_matches_classic() {
+        // NA-MVMD should return modes for original channels only (no noise channels in output).
+        let num_samples = 128;
+        let t: Vec<f64> = (0..num_samples)
+            .map(|i| i as f64 / num_samples as f64)
+            .collect();
+
+        let make_channel = |f1: f64, f2: f64| -> Vec<f64> {
+            t.iter()
+                .map(|&ti| (2.0 * PI * f1 * ti).sin() + 0.5 * (2.0 * PI * f2 * ti).sin())
+                .collect()
+        };
+
+        let data = vec![make_channel(5.0, 20.0), make_channel(4.0, 18.0)];
+
+        let classic = MVMD::new(data.clone(), 2000.0)
+            .with_admm_config(ADMMConfig::new(1e-6, 0.0, 100))
+            .decompose(2);
+
+        let na = MVMD::new(data, 2000.0)
+            .with_admm_config(ADMMConfig::new(1e-6, 0.0, 100))
+            .with_variant(MvmdVariant::NoiseAssisted {
+                noise_channels: 1,
+                noise_std_ratio: 1.0,
+                seed: 0xC0FFEE,
+                gcs_smoothing_window: 3,
+                gcs_power_iters: 10,
+                gcs_power_tol: 1e-4,
+            })
+            .decompose(2);
+
+        // Output shape must match classic: (K=2, C=2, T=128) — no noise channels leaked.
+        assert_eq!(na.modes.shape(), classic.modes.shape());
+        assert_eq!(
+            na.center_frequencies.len(),
+            classic.center_frequencies.len()
+        );
+    }
+
+    #[test]
+    fn test_na_mvmd_deterministic() {
+        // Same seed → identical output across two runs.
+        let num_samples = 64;
+        let t: Vec<f64> = (0..num_samples)
+            .map(|i| i as f64 / num_samples as f64)
+            .collect();
+        let ch: Vec<f64> = t.iter().map(|&ti| (2.0 * PI * 10.0 * ti).sin()).collect();
+        let data = vec![ch.clone(), ch];
+
+        let variant = MvmdVariant::NoiseAssisted {
+            noise_channels: 1,
+            noise_std_ratio: 0.5,
+            seed: 42,
+            gcs_smoothing_window: 3,
+            gcs_power_iters: 5,
+            gcs_power_tol: 1e-3,
+        };
+
+        let r1 = MVMD::new(data.clone(), 2000.0)
+            .with_admm_config(ADMMConfig::new(1e-5, 0.0, 50))
+            .with_variant(variant.clone())
+            .decompose(2);
+
+        let r2 = MVMD::new(data, 2000.0)
+            .with_admm_config(ADMMConfig::new(1e-5, 0.0, 50))
+            .with_variant(variant)
+            .decompose(2);
+
+        for (v1, v2) in r1
+            .center_frequencies
+            .iter()
+            .zip(r2.center_frequencies.iter())
+        {
+            assert!(
+                (v1 - v2).abs() < 1e-12,
+                "center frequencies not deterministic: {v1} vs {v2}"
+            );
+        }
     }
 }

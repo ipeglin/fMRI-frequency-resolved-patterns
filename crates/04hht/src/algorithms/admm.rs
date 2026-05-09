@@ -18,14 +18,16 @@ pub struct ADMMConfig {
 
 impl Default for ADMMConfig {
     fn default() -> Self {
+        use utils::config::defaults;
         Self {
-            tolerance: 1e-3,
-            tau: 1e-2,
-            max_iterations: 5000,
+            tolerance: defaults::ADMM_TOLERANCE,
+            tau: defaults::ADMM_TAU,
+            max_iterations: defaults::ADMM_MAX_ITERATIONS as u32,
         }
     }
 }
 
+#[allow(dead_code)]
 impl ADMMConfig {
     pub fn new(tolerance: f64, tau: f64, max_iterations: u32) -> Self {
         Self {
@@ -58,6 +60,7 @@ impl ADMMConfig {
 ///
 /// Implementors should store the ADMMConfig and use it during their
 /// optimization procedure.
+#[allow(dead_code)]
 pub trait ADMMOptimizer {
     /// Returns a reference to the ADMM configuration
     fn admm_config(&self) -> &ADMMConfig;

@@ -522,8 +522,7 @@ dependencies = [
  "feature_extraction",
  "fmri_parcellation",
  "fmri_segment_trials",
- "hilbert",
- "mvmd",
+ "hht",
  "polars",
  "serde",
  "serde_json",
@@ -1303,7 +1302,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
-name = "hilbert"
+name = "hht"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1311,6 +1310,14 @@ dependencies = [
  "hdf5",
  "ndarray 0.15.6",
  "num-complex",
+ "polars",
+ "polars-io",
+ "rand 0.8.5",
+ "rand_chacha 0.3.1",
+ "rand_distr 0.4.3",
+ "rayon",
+ "regex",
+ "rustfft",
  "scirs2-signal",
  "serde",
  "serde_json",
@@ -1849,25 +1856,6 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "mvmd"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "hdf5",
- "ndarray 0.15.6",
- "polars",
- "polars-io",
- "rayon",
- "regex",
- "rustfft",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tracing",
- "utils",
 ]
 
 [[package]]
