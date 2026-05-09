@@ -13,17 +13,14 @@ pub struct AppConfig {
     #[serde(default)]
     pub task_sampling_rate: f64,
     pub tcp_annex_remote: String,
-    pub csv_output_dir: PathBuf,
     pub tcp_repo_dir: PathBuf,
     pub fmriprep_output_dir: PathBuf,
     pub consolidated_data_dir: PathBuf,
     pub subject_filter_dir: PathBuf,
-    pub task_regressors_output_dir: PathBuf,
     pub cortical_atlas: PathBuf,
     pub subcortical_atlas: PathBuf,
     pub cortical_atlas_lut: PathBuf,
     pub subcortical_atlas_lut: PathBuf,
-    pub data_splitting_output_dir: PathBuf,
     /// Directory where classification runners write per-analysis JSON results
     /// (one file per `<analysis>__<source>.json`) for downstream plotting.
     pub classification_results_dir: PathBuf,
@@ -91,16 +88,13 @@ impl Default for AppConfig {
         Self {
             task_sampling_rate: 1.25, // TR = 800ms
             tcp_repo_dir: PathBuf::from("/path/to/tcp"),
-            csv_output_dir: PathBuf::from("/path/to/csv"),
             fmriprep_output_dir: PathBuf::from("/path/to/raw_fmri_data"),
             consolidated_data_dir: PathBuf::from("/path/to/fmri_timeseries"),
             subject_filter_dir: PathBuf::from("/path/to/subject_filters"),
-            task_regressors_output_dir: PathBuf::from("/path/to/glm_conditions"),
             cortical_atlas: PathBuf::from("/path/to/cortical_atlas"),
             subcortical_atlas: PathBuf::from("/path/to/subcortical_atlas"),
             cortical_atlas_lut: PathBuf::from("/path/to/cortical_atlas_lut"),
             subcortical_atlas_lut: PathBuf::from("/path/to/subcortical_atlas_lut"),
-            data_splitting_output_dir: PathBuf::from("/path/to/data_split"),
             classification_results_dir: PathBuf::from("/path/to/classification_results"),
             intermediates_output_dir: default_intermediates_output_dir(),
             tcp_annex_remote: String::new(),
@@ -125,7 +119,6 @@ impl fmt::Display for AppConfig {
         writeln!(f, "AppConfig:")?;
         writeln!(f, "  task_sampling_rate: {} Hz", self.task_sampling_rate)?;
         writeln!(f, "  tcp_repo_dir: {}", self.tcp_repo_dir.display())?;
-        writeln!(f, "  cvs_output_dir: {}", self.csv_output_dir.display())?;
         writeln!(
             f,
             "  fmriprep_output_dir: {}",
@@ -140,11 +133,6 @@ impl fmt::Display for AppConfig {
             f,
             "  subject_filter_dir: {}",
             self.subject_filter_dir.display()
-        )?;
-        writeln!(
-            f,
-            "  task_regressors_output_dir: {}",
-            self.task_regressors_output_dir.display()
         )?;
         writeln!(f, "  cortical_atlas: {}", self.cortical_atlas.display())?;
         writeln!(
@@ -161,11 +149,6 @@ impl fmt::Display for AppConfig {
             f,
             "  subcortical_atlas_lut: {}",
             self.subcortical_atlas_lut.display()
-        )?;
-        writeln!(
-            f,
-            "  data_splitting_output_dir: {}",
-            self.data_splitting_output_dir.display()
         )?;
         writeln!(
             f,
@@ -423,17 +406,14 @@ mod tests {
     fn parses_flat_shared_fields() {
         let toml = r#"
             task_sampling_rate = 1.25
-            csv_output_dir = "/c"
             tcp_repo_dir = "/t"
             fmriprep_output_dir = "/f"
             consolidated_data_dir = "/b"
             subject_filter_dir = "/sf"
-            task_regressors_output_dir = "/glm"
             cortical_atlas = "/ca"
             subcortical_atlas = "/sca"
             cortical_atlas_lut = "/cal"
             subcortical_atlas_lut = "/scal"
-            data_splitting_output_dir = "/ds"
             classification_results_dir = "/cr"
             tcp_annex_remote = "uuid"
         "#;
@@ -448,17 +428,14 @@ mod tests {
     fn parses_stage_params() {
         let toml = r#"
             task_sampling_rate = 1.25
-            csv_output_dir = "/c"
             tcp_repo_dir = "/t"
             fmriprep_output_dir = "/f"
             consolidated_data_dir = "/b"
             subject_filter_dir = "/sf"
-            task_regressors_output_dir = "/glm"
             cortical_atlas = "/ca"
             subcortical_atlas = "/sca"
             cortical_atlas_lut = "/cal"
             subcortical_atlas_lut = "/scal"
-            data_splitting_output_dir = "/ds"
             classification_results_dir = "/cr"
             tcp_annex_remote = "uuid"
 

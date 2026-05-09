@@ -8,12 +8,9 @@ tcp_annex_remote = "9cee7da3-a848-4b59-b8ff-d7848f2ad864" # Git annex remote
 
 # Directories
 tcp_repo_dir = ""
-csv_output_dir = ""
 fmriprep_output_dir = ""
 consolidated_data_dir = ""
 subject_filter_dir = ""
-task_regressors_output_dir = ""
-data_splitting_output_dir = ""
 classification_results_dir = ""
 # Root directory for diagnostic TSV dumps (BIDS-ish naming, sub-dirs per stage).
 # Only written when dump_intermediates = true.

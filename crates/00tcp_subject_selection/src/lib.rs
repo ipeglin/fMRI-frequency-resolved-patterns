@@ -94,10 +94,8 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     /////////////////////////
 
     let filter_output_dir = &cfg.subject_filter_dir;
-    let csv_output_dir = &cfg.csv_output_dir;
 
     fs::create_dir_all(filter_output_dir)?;
-    fs::create_dir_all(csv_output_dir)?;
 
     // Check demos file is available
     let demos_path = dataset_dir.join("phenotype").join("demos.tsv");
@@ -596,10 +594,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     )?;
 
     write_sorted(
-        csv_output_dir.join("desc-controls_subjects.tsv"),
-        &healthy_controls_df,
-    )?;
-    write_sorted(
         filter_output_dir.join("desc-controls_subjects.tsv"),
         &healthy_controls_df,
     )?;
@@ -623,7 +617,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         .drop(cols(["subjectkey_right"]))
         .collect()?;
 
-    write_sorted(csv_output_dir.join("desc-mdd_subjects.tsv"), &mdd_df)?;
+    write_sorted(filter_output_dir.join("desc-mdd_subjects.tsv"), &mdd_df)?;
 
     // All anhedonic subjects: union of SHAPS anhedonic, TEPS-ANT anhedonic, TEPS-CON anhedonic
     let anhedonic_df = shaps_anhedonic_df
@@ -666,10 +660,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
 
     write_sorted(
         filter_output_dir.join("desc-anhedonic_subjects.tsv"),
-        &anhedonic_df,
-    )?;
-    write_sorted(
-        csv_output_dir.join("desc-anhedonic_subjects.tsv"),
         &anhedonic_df,
     )?;
 

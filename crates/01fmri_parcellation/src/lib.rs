@@ -66,7 +66,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         "starting fMRI preprocessing pipeline"
     );
 
-    let csv_dir = &cfg.csv_output_dir;
+    let csv_dir = &cfg.subject_filter_dir;
     let cohort_files: &[(&str, &str)] = &[
         ("desc-controls_subjects.tsv", "control"),
         ("desc-anhedonic_subjects.tsv", "anhedonic"),
@@ -117,12 +117,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     }
 
     std::fs::create_dir_all(&cfg.consolidated_data_dir)?;
-    std::fs::create_dir_all(&cfg.csv_output_dir)?;
-
-    let csv_crate_prefix = BidsFilename::new()
-        .with_pair("crate", "01")
-        .with_extension(".csv")
-        .with_directory(&cfg.csv_output_dir);
 
     let mut processed_count = 0usize;
     let mut skipped_count = 0usize;
@@ -225,12 +219,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                 .join(BidsSubjectId::parse(subject_key).to_dir_name())
                 .join(format!("{}.h5", output_stem));
 
-            let _ = csv_crate_prefix
-                .clone()
-                .with_pair("sub", subject_id.as_bids_id())
-                .with_pair("task", task_name)
-                .with_pair("run", bids_filename.get("run").unwrap_or("unknown"));
-
             // Skip when both dataset and cohort metadata are present, unless --force.
             if !cfg.force
                 && output_h5_path.exists()
@@ -262,8 +250,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                 skipped_count += 1;
                 info!(
                     subject_key = subject_key,
-                    cohort,
-                    "stamped missing cohort metadata on existing H5"
+                    cohort, "stamped missing cohort metadata on existing H5"
                 );
                 continue;
             }
@@ -324,8 +311,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                 "timeseries sample values"
             );
 
-            let full_run_std =
-                concatenate(Axis(0), &[cortical_ts.view(), subcortical_ts.view()])?;
+            let full_run_std = concatenate(Axis(0), &[cortical_ts.view(), subcortical_ts.view()])?;
 
             let cohort = cohort_map.get(subject_key).copied().unwrap_or("unknown");
             let write_start = Instant::now();
@@ -439,4 +425,3 @@ fn write_metadata(path: &Path, subjectkey: &str, cohort: &str) -> Result<()> {
     )?;
     Ok(())
 }
-

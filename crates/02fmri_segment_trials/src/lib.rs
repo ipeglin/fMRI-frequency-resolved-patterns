@@ -1,12 +1,7 @@
 use anyhow::Result;
 use ndarray::{Array2, s};
 use polars::prelude::*;
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::PathBuf,
-    time::Instant,
-};
+use std::{collections::BTreeMap, fs, path::PathBuf, time::Instant};
 use tracing::{info, warn};
 use utils::bids_filename::BidsFilename;
 use utils::bids_subject_id::BidsSubjectId;
@@ -55,7 +50,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     info!(
         tcp_repo_dir = % cfg.tcp_repo_dir.display(),
         consolidated_data_dir = %cfg.consolidated_data_dir.display(),
-        task_regressors_output_dir = %cfg.task_regressors_output_dir.display(),
         force = cfg.force,
         "starting fMRI trial segmentation"
     );

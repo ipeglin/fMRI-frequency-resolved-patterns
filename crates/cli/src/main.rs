@@ -47,9 +47,6 @@ enum Command {
         tcp_repo_dir: Option<PathBuf>,
 
         #[arg(long)]
-        csv_output_dir: Option<PathBuf>,
-
-        #[arg(long)]
         tcp_annex_remote: Option<String>,
 
         #[arg(long)]
@@ -59,9 +56,6 @@ enum Command {
         dry_run: Option<bool>,
     },
     ParcellateBold {
-        #[arg(long)]
-        csv_output_dir: Option<PathBuf>,
-
         #[arg(long)]
         fmriprep_output_dir: Option<PathBuf>,
 
@@ -94,21 +88,12 @@ enum Command {
         tcp_repo_dir: Option<PathBuf>,
 
         #[arg(long)]
-        csv_output_dir: Option<PathBuf>,
-
-        #[arg(long)]
         consolidated_data_dir: Option<PathBuf>,
-
-        #[arg(long)]
-        task_regressors_output_dir: Option<PathBuf>,
 
         #[arg(long, short = 'f')]
         force: bool,
     },
     Cwt {
-        #[arg(long)]
-        csv_output_dir: Option<PathBuf>,
-
         #[arg(long)]
         consolidated_data_dir: Option<PathBuf>,
 
@@ -120,9 +105,6 @@ enum Command {
         consolidated_data_dir: Option<PathBuf>,
 
         #[arg(long)]
-        csv_output_dir: Option<PathBuf>,
-
-        #[arg(long)]
         num_modes: Option<u8>,
 
         #[arg(long, short = 'f')]
@@ -132,9 +114,6 @@ enum Command {
         #[arg(long)]
         consolidated_data_dir: Option<PathBuf>,
 
-        #[arg(long)]
-        csv_output_dir: Option<PathBuf>,
-
         #[arg(long, short = 'f')]
         force: bool,
     },
@@ -142,9 +121,6 @@ enum Command {
     FeatureExtraction {
         #[arg(long)]
         consolidated_data_dir: Option<PathBuf>,
-
-        #[arg(long)]
-        csv_output_dir: Option<PathBuf>,
 
         #[arg(long)]
         cortical_lut: Option<PathBuf>,
@@ -161,9 +137,6 @@ enum Command {
     Classify {
         #[arg(long)]
         consolidated_data_dir: Option<PathBuf>,
-
-        #[arg(long)]
-        csv_output_dir: Option<PathBuf>,
 
         #[arg(long)]
         data_splitting_dir: Option<PathBuf>,
@@ -230,16 +203,12 @@ fn main() -> Result<()> {
     match cli.cmd {
         Command::SelectSubjects {
             tcp_repo_dir,
-            csv_output_dir,
             tcp_annex_remote,
             subject_filter_dir,
             dry_run,
         } => {
             if let Some(v) = tcp_repo_dir {
                 cfg.tcp_repo_dir = v;
-            }
-            if let Some(v) = csv_output_dir {
-                cfg.csv_output_dir = v;
             }
             if let Some(v) = subject_filter_dir {
                 cfg.subject_filter_dir = v;
@@ -255,7 +224,6 @@ fn main() -> Result<()> {
         }
         Command::ParcellateBold {
             fmriprep_output_dir,
-            csv_output_dir,
             subject_filter_dir,
             consolidated_data_dir,
             cortical_atlas,
@@ -266,9 +234,6 @@ fn main() -> Result<()> {
         } => {
             if let Some(v) = fmriprep_output_dir {
                 cfg.fmriprep_output_dir = v;
-            }
-            if let Some(v) = csv_output_dir {
-                cfg.csv_output_dir = v;
             }
             if let Some(v) = subject_filter_dir {
                 cfg.subject_filter_dir = v;
@@ -296,22 +261,14 @@ fn main() -> Result<()> {
         }
         Command::SegmentTrials {
             tcp_repo_dir,
-            csv_output_dir,
             consolidated_data_dir,
-            task_regressors_output_dir,
             force,
         } => {
             if let Some(v) = tcp_repo_dir {
                 cfg.tcp_repo_dir = v;
             }
-            if let Some(v) = csv_output_dir {
-                cfg.csv_output_dir = v;
-            }
             if let Some(v) = consolidated_data_dir {
                 cfg.consolidated_data_dir = v;
-            }
-            if let Some(v) = task_regressors_output_dir {
-                cfg.task_regressors_output_dir = v;
             }
             if force {
                 cfg.force = true;
@@ -321,14 +278,10 @@ fn main() -> Result<()> {
         }
         Command::Cwt {
             consolidated_data_dir,
-            csv_output_dir,
             force,
         } => {
             if let Some(v) = consolidated_data_dir {
                 cfg.consolidated_data_dir = v;
-            }
-            if let Some(v) = csv_output_dir {
-                cfg.csv_output_dir = v;
             }
             if force {
                 cfg.force = true;
@@ -338,15 +291,11 @@ fn main() -> Result<()> {
         }
         Command::Hht {
             consolidated_data_dir,
-            csv_output_dir,
             num_modes,
             force,
         } => {
             if let Some(v) = consolidated_data_dir {
                 cfg.consolidated_data_dir = v;
-            }
-            if let Some(v) = csv_output_dir {
-                cfg.csv_output_dir = v;
             }
             if let Some(v) = num_modes {
                 cfg.hht.num_modes = v as usize;
@@ -359,14 +308,10 @@ fn main() -> Result<()> {
         }
         Command::Fc {
             consolidated_data_dir,
-            csv_output_dir,
             force,
         } => {
             if let Some(v) = consolidated_data_dir {
                 cfg.consolidated_data_dir = v;
-            }
-            if let Some(v) = csv_output_dir {
-                cfg.csv_output_dir = v;
             }
             if force {
                 cfg.force = true;
@@ -377,7 +322,6 @@ fn main() -> Result<()> {
         #[cfg(feature = "feature-extraction")]
         Command::FeatureExtraction {
             consolidated_data_dir,
-            csv_output_dir,
             cortical_lut,
             subcortical_lut,
             cnn_weights,
@@ -385,9 +329,6 @@ fn main() -> Result<()> {
         } => {
             if let Some(v) = consolidated_data_dir {
                 cfg.consolidated_data_dir = v;
-            }
-            if let Some(v) = csv_output_dir {
-                cfg.csv_output_dir = v;
             }
             if let Some(v) = cortical_lut {
                 cfg.cortical_atlas_lut = v;
@@ -406,18 +347,11 @@ fn main() -> Result<()> {
         }
         Command::Classify {
             consolidated_data_dir,
-            csv_output_dir,
             data_splitting_dir,
             classification_results_dir,
         } => {
             if let Some(v) = consolidated_data_dir {
                 cfg.consolidated_data_dir = v;
-            }
-            if let Some(v) = csv_output_dir {
-                cfg.csv_output_dir = v;
-            }
-            if let Some(v) = data_splitting_dir {
-                cfg.data_splitting_output_dir = v;
             }
             if let Some(v) = classification_results_dir {
                 cfg.classification_results_dir = v;
