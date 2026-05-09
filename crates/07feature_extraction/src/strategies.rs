@@ -42,10 +42,10 @@ pub const SHUFFLE_SEED: u64 = 42;
 pub enum FeatureSrc {
     Ts,
     Cwt,
-    /// HHT from all-channel MVMD (`05hht/full_run_std`, `05hht/blocks_std`).
+    /// HHT from all-channel MVMD (`04hht/full_run_std`, `04hht/blocks_std`).
     /// ROI selection applied at load time, analogous to `Cwt`.
     Hht,
-    /// HHT from ROI-stratified MVMD (`05hht/full_run_std_roi`, `05hht/blocks_std_roi`).
+    /// HHT from ROI-stratified MVMD (`04hht/full_run_std_roi`, `04hht/blocks_std_roi`).
     /// Already ROI-selected upstream — no index_select at load time.
     HhtRoi,
 }
@@ -65,7 +65,6 @@ impl FeatureSrc {
 pub struct AnalysisCtx<'a> {
     pub extractor: &'a FeatureExtractor,
     pub fit: ImageFitMode,
-    pub hht_log_amp: bool,
     /// Concat-row atlas indices for the configured `[roi_selection]`.
     pub roi_indices: &'a [i64],
     pub roi_index_tensor: &'a Tensor,
@@ -83,8 +82,10 @@ pub struct AnalysisCtx<'a> {
 }
 
 impl AnalysisCtx<'_> {
-    fn log_amp_for(&self, src: FeatureSrc) -> bool {
-        matches!(src, FeatureSrc::Hht | FeatureSrc::HhtRoi) && self.hht_log_amp
+    /// Returns true when the spectrogram for `src` was pre-normalized by the
+    /// producer crate and the consumer-side min-max step should be skipped.
+    fn pre_normalized_for(src: FeatureSrc) -> bool {
+        !matches!(src, FeatureSrc::Ts)
     }
 }
 
@@ -303,10 +304,10 @@ fn scatter_hht_spectrum(inst_freq: &Tensor, envelope: &Tensor) -> Tensor {
     out
 }
 
-/// HHT restAP whole-run from all-channel MVMD: `/05hht/full_run_std/{instantaneous_frequency,envelope}`
+/// HHT restAP whole-run from all-channel MVMD: `/04hht/full_run_std/{instantaneous_frequency,envelope}`
 /// Scatter-bins IF+envelope into `[n_all, 224, T_full]`, then ROI-selects.
 fn load_hht_full_run(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Option<Tensor>> {
-    let hht_root = match h5.group("05hht") {
+    let hht_root = match h5.group("04hht") {
         Ok(g) => g,
         Err(_) => return Ok(None),
     };
@@ -329,10 +330,10 @@ fn load_hht_full_run(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Option<Tensor
     Ok(Some(spec.index_select(0, ctx.roi_index_tensor)))
 }
 
-/// HHT hammerAP face blocks from all-channel MVMD: `/05hht/blocks_std/{trial_type}/{block_name}/{if,env}`
+/// HHT hammerAP face blocks from all-channel MVMD: `/04hht/blocks_std/{trial_type}/{block_name}/{if,env}`
 /// Scatter-bins IF+envelope per block into `[n_all, 224, T_block]`, then ROI-selects.
 fn load_hht_blocks(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Vec<(String, Tensor)>> {
-    let hht_root = match h5.group("05hht") {
+    let hht_root = match h5.group("04hht") {
         Ok(g) => g,
         Err(_) => return Ok(vec![]),
     };
@@ -377,10 +378,10 @@ fn load_hht_blocks(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Vec<(String, Te
     Ok(out)
 }
 
-/// HHT restAP whole-run from ROI-stratified MVMD: `/05hht/full_run_std_roi/{if,env}`
+/// HHT restAP whole-run from ROI-stratified MVMD: `/04hht/full_run_std_roi/{if,env}`
 /// Already ROI-selected upstream; scatter-bins IF+envelope into `[n_target, 224, T_full]`.
 fn load_hht_roi_full_run(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Option<Tensor>> {
-    let hht_root = match h5.group("05hht") {
+    let hht_root = match h5.group("04hht") {
         Ok(g) => g,
         Err(_) => return Ok(None),
     };
@@ -410,10 +411,10 @@ fn load_hht_roi_full_run(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Option<Te
 }
 
 /// HHT hammerAP face blocks from ROI-stratified MVMD:
-/// `/05hht/blocks_std_roi/{trial_type}/{block_name}/{if,env}`
+/// `/04hht/blocks_std_roi/{trial_type}/{block_name}/{if,env}`
 /// Already ROI-selected upstream; scatter-bins IF+envelope per block.
 fn load_hht_roi_blocks(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Vec<(String, Tensor)>> {
-    let hht_root = match h5.group("05hht") {
+    let hht_root = match h5.group("04hht") {
         Ok(g) => g,
         Err(_) => return Ok(vec![]),
     };
@@ -467,15 +468,15 @@ fn load_hht_roi_blocks(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Vec<(String
 }
 
 fn validate_roi_range(roi_indices: &[i64], n_available: i64, what: &str) -> Result<()> {
-    if let Some(&max_idx) = roi_indices.iter().max() {
-        if max_idx >= n_available {
-            anyhow::bail!(
-                "target ROI index {} out of range for {} (n_available={})",
-                max_idx,
-                what,
-                n_available
-            );
-        }
+    if let Some(&max_idx) = roi_indices.iter().max()
+        && max_idx >= n_available
+    {
+        anyhow::bail!(
+            "target ROI index {} out of range for {} (n_available={})",
+            max_idx,
+            what,
+            n_available
+        );
     }
     Ok(())
 }
@@ -487,8 +488,7 @@ fn validate_roi_range(roi_indices: &[i64], n_available: i64, what: &str) -> Resu
 /// Run a `[n_rois, F, T]` spectrum through preprocessing + DenseNet.
 /// Returns `(per_roi [n_rois, 1920], mean [1920])` on CPU as f32.
 fn extract(ctx: &AnalysisCtx, src: FeatureSrc, spec: &Tensor) -> (Tensor, Tensor) {
-    let log_amp = ctx.log_amp_for(src);
-    let batch = batch_spectrum_to_input(spec, log_amp, ctx.fit);
+    let batch = batch_spectrum_to_input(spec, AnalysisCtx::pre_normalized_for(src), ctx.fit);
     let per_roi = ctx
         .extractor
         .extract_features(&batch)
@@ -507,8 +507,8 @@ fn extract_with_fit(
     spec: &Tensor,
     fit: ImageFitMode,
 ) -> (Tensor, Tensor) {
-    let log_amp = ctx.log_amp_for(src);
-    let batch = batch_spectrum_to_input(spec, log_amp, fit);
+    let batch =
+        batch_spectrum_to_input(spec, AnalysisCtx::pre_normalized_for(src), fit);
     let per_roi = ctx
         .extractor
         .extract_features(&batch)
@@ -581,8 +581,8 @@ fn image_fit_label(fit: ImageFitMode) -> &'static str {
     }
 }
 
-fn analysis_root<'a>(
-    features_root: &'a hdf5::Group,
+fn analysis_root(
+    features_root: &hdf5::Group,
     src: FeatureSrc,
     analysis: &str,
     force: bool,

@@ -36,7 +36,7 @@ impl DenseNet201 {
             .add(nn::batch_norm2d(&fp / "norm0", 64, Default::default()))
             .add_fn(|x| {
                 x.relu()
-                    .max_pool2d(&[3, 3], &[2, 2], &[1, 1], &[1, 1], false)
+                    .max_pool2d([3, 3], [2, 2], [1, 1], [1, 1], false)
             });
 
         // Dense Blocks and Transition Layers
@@ -61,7 +61,7 @@ impl DenseNet201 {
             .add(nn::batch_norm2d(&fp / "norm5", 1920, Default::default()))
             .add_fn(|x| {
                 x.relu()
-                    .avg_pool2d(&[7, 7], &[1, 1], &[0, 0], false, true, 1)
+                    .avg_pool2d([7, 7], [1, 1], [0, 0], false, true, 1)
                     .flat_view()
             });
 

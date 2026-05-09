@@ -29,7 +29,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         force = cfg.force,
         roi_selection_name = %cfg.roi_selection.name,
         image_fit = ?cfg.feature_extraction.image_fit,
-        hht_log_amp = cfg.feature_extraction.hht_log_amp,
+        hht_log_amp = cfg.hht.hht_log_amp,
         "starting CNN feature extraction pipeline"
     );
 
@@ -153,7 +153,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                 let ctx = AnalysisCtx {
                     extractor: &extractor,
                     fit: cfg.feature_extraction.image_fit,
-                    hht_log_amp: cfg.feature_extraction.hht_log_amp,
                     roi_indices: &roi_indices,
                     roi_index_tensor: &roi_index_tensor,
                     roi_labels_joined: &labels_joined,
