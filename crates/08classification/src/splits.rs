@@ -17,9 +17,9 @@ pub fn write_subject_split_csvs<P: AsRef<Path>>(
     val: &[String],
 ) -> Result<()> {
     let out = out_dir.as_ref();
-    write_subject_set(out.join("subjects_train.csv"), train)?;
-    write_subject_set(out.join("subjects_test.csv"), test)?;
-    write_subject_set(out.join("subjects_validation.csv"), val)?;
+    write_subject_set(out.join("subjects_train.tsv"), train)?;
+    write_subject_set(out.join("subjects_test.tsv"), test)?;
+    write_subject_set(out.join("subjects_validation.tsv"), val)?;
     Ok(())
 }
 
@@ -31,7 +31,7 @@ fn write_subject_set<P: AsRef<Path>>(path: P, subjects: &[String]) -> Result<()>
     let mut sorted: Vec<String> = subjects.to_vec();
     sorted.sort();
     let df = DataFrame::new(vec![Column::new("subjectkey".into(), sorted)])?;
-    polars_csv::write_dataframe(&path, &df)
+    polars_csv::write_tsv(&path, &df)
         .with_context(|| format!("failed to write {}", path.as_ref().display()))?;
     Ok(())
 }

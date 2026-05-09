@@ -48,7 +48,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     let started = Instant::now();
     info!("starting block ensemble (task_per_block) classification");
 
-    let mut labels = load_labels(&cfg.subject_filter_dir)?;
+    let mut labels = load_labels(&cfg.consolidated_data_dir)?;
     let subject_ids: HashSet<String> = fs::read_dir(&cfg.consolidated_data_dir)?
         .filter_map(|e| e.ok())
         .filter_map(|e| {

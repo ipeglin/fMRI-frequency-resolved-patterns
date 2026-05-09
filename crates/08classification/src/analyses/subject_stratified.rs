@@ -46,7 +46,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         .collect();
     let mut subject_ids_vec: Vec<String> = subject_ids.into_iter().collect();
     subject_ids_vec.sort();
-    let labels = load_labels(&cfg.subject_filter_dir)?;
+    let labels = load_labels(&cfg.consolidated_data_dir)?;
 
     let mut controls = Vec::new();
     let mut anhedonics = Vec::new();

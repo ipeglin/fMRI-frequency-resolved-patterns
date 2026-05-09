@@ -1,6 +1,5 @@
-//! Analysis A' — restAP baseline chunked feature-space mean: per-ROI rows from
-//! `features/<src>/baseline_chunked_feature_mean` (features averaged across chunks
-//! after DenseNet, not before).
+//! Analysis A' (subject-stratified) — restAP baseline chunked feature-space mean:
+//! subject-disjoint 70/15/15 split so no subject appears in both train and calibration/holdout.
 
 use std::collections::HashSet;
 use std::fs;
@@ -13,11 +12,11 @@ use utils::config::AppConfig;
 
 use crate::classifiers::DistanceMetric;
 use crate::dataset::{AnalysisKind, FeatureSource, build_per_roi_dataset, load_labels};
-use crate::eval::eval_knn_three_way_split;
+use crate::eval::eval_knn_three_way_split_subject_aware;
 
 pub fn run(cfg: &AppConfig) -> Result<()> {
     let started = Instant::now();
-    info!("starting baseline (chunked feature mean) classification");
+    info!("starting baseline (chunked feature mean) subject-stratified classification");
 
     let metric: DistanceMetric = cfg
         .classification
@@ -39,6 +38,8 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         .collect();
     labels.retain(|k, _| subject_ids.contains(k));
 
+    let results_dir = cfg.resolved_classification_results_dir().join("subject_stratified");
+
     for source in [
         FeatureSource::Ts,
         FeatureSource::Cwt,
@@ -52,17 +53,11 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             source,
             AnalysisKind::BaselineChunkedFeatureMean,
         )?;
-        info!(
-            source = ?source,
-            samples = xs.len(),
-            features = xs.first().map(|r| r.len()).unwrap_or(0),
-            "built baseline_chunked_feature_mean dataset"
-        );
         if xs.is_empty() {
             debug!(source = ?source, "no samples, skipping");
             continue;
         }
-        eval_knn_three_way_split(
+        eval_knn_three_way_split_subject_aware(
             xs,
             ys,
             &groups,
@@ -70,13 +65,13 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             metric,
             "baseline_chunked_feature_mean",
             source,
-            &cfg.resolved_classification_results_dir(),
+            &results_dir,
         )?;
     }
 
     info!(
         elapsed_ms = started.elapsed().as_millis() as u64,
-        "baseline (chunked feature mean) done"
+        "baseline (chunked feature mean) subject-stratified done"
     );
     Ok(())
 }

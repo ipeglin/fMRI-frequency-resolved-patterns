@@ -139,23 +139,51 @@ pub fn load_subject_ids(csv: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Load `subjectkey -> Label` from `controls.csv` and `anhedonic.csv`.
-pub fn load_labels(dir: &Path) -> Result<HashMap<String, Label>> {
+/// Load `subjectkey -> Label` by reading the `/metadata/cohort` attribute from
+/// each subject's HDF5 file in `consolidated_data_dir`.
+///
+/// Subjects without a `cohort` attribute (e.g. files produced before the IO
+/// refactor) are silently skipped so pre-existing H5 files do not break
+/// classification runs.
+pub fn load_labels(consolidated_data_dir: &Path) -> Result<HashMap<String, Label>> {
     let mut map = HashMap::new();
-    for (filename, label) in [
-        ("controls.csv", Label::Control),
-        ("anhedonic.csv", Label::Anhedonic),
-    ] {
-        let path = dir.join(filename);
-        if !path.exists() {
-            eprintln!("Warning: expected file not found: {:?}", path);
+    let Ok(entries) = std::fs::read_dir(consolidated_data_dir) else {
+        return Ok(map);
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let subject_dir = entry.path();
+        if !subject_dir.is_dir() {
             continue;
         }
-        let df = utils::polars_csv::read_dataframe(&path)?;
-        let col = df.column("subjectkey")?.str()?;
-        for s in col.into_no_null_iter() {
-            map.insert(BidsSubjectId::parse(s).to_dir_name(), label);
-        }
+        let subject = BidsSubjectId::parse(
+            subject_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(""),
+        )
+        .to_dir_name();
+        let h5_files = list_subject_h5(&subject_dir)?;
+        let Some(h5_path) = h5_files.first() else {
+            continue;
+        };
+        let Ok(file) = hdf5::File::open(h5_path) else {
+            continue;
+        };
+        let Ok(meta) = file.group("metadata") else {
+            continue;
+        };
+        let Ok(attr) = meta.attr("cohort") else {
+            continue;
+        };
+        let Ok(cohort) = attr.read_scalar::<hdf5::types::VarLenUnicode>() else {
+            continue;
+        };
+        let label = match cohort.as_str() {
+            "control" => Label::Control,
+            "anhedonic" => Label::Anhedonic,
+            _ => continue,
+        };
+        map.insert(subject, label);
     }
     Ok(map)
 }
@@ -289,6 +317,7 @@ pub fn read_mean(
 /// is the subject id for each row — useful for subject-stratified or
 /// group-aware splits. Files whose BIDS task does not match `kind.task()` are
 /// skipped automatically.
+#[allow(clippy::type_complexity)]
 pub fn build_per_roi_dataset<I, S>(
     consolidated_data_dir: &Path,
     subject_ids: I,
@@ -383,6 +412,7 @@ where
 /// One row per (file × leaf). Returns `(xs, ys, groups)` where `groups` is
 /// `subject` for single-leaf analyses or `subject_<leaf>` for multi-leaf ones.
 /// The `roi` column in downstream CSV output will be empty (no `_roiNNN` suffix).
+#[allow(clippy::type_complexity)]
 pub fn build_mean_dataset<I, S>(
     consolidated_data_dir: &Path,
     subject_ids: I,
@@ -470,6 +500,7 @@ where
 /// Returns `leaf_name -> (xs, ys, subject_ids)`. Each row is one ROI of one
 /// (subject, file, leaf) combination. Used by ensemble classifiers that fit
 /// one model per chunk/block and combine predictions across leaves.
+#[allow(clippy::type_complexity)]
 pub fn build_per_leaf_per_roi_dataset<I, S>(
     consolidated_data_dir: &Path,
     subject_ids: I,

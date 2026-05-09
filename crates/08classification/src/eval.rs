@@ -4,9 +4,9 @@
 //! with the configured distance, then **emit per-sample probabilities** rather
 //! than hard labels:
 //!
-//! * `p1_raw`  – raw KNN vote-share for class 1 (anhedonic).
-//! * `p1_cal`  – Platt-scaled probability fit on the validation split and
-//!               applied to test (and to val itself for diagnostics).
+//! * `p1_raw` – raw KNN vote-share for class 1 (anhedonic).
+//! * `p1_cal` – Platt-scaled probability fit on the test (calibration) split
+//!   and applied to val (held-out evaluation set).
 //!
 //! For each split we compute Brier score, log loss, AUC-ROC, AUC-PR, expected
 //! calibration error, a uniform-binned reliability table, a threshold sweep,
@@ -21,6 +21,7 @@
 
 use anyhow::Result;
 use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use tracing::info;
@@ -37,7 +38,7 @@ use crate::metrics::{
     expected_calibration_error, log_loss, threshold_sweep, youden_optimal_threshold,
 };
 use crate::normalizer::ZScoreNormalizer;
-use crate::splits::split_rows_stratified_new;
+use crate::splits::{split_rows_stratified_new, split_subjects_stratified};
 
 const SEED: u64 = 42;
 const SWEEP_THRESHOLDS: &[f32] = &[0.3, 0.4, 0.5, 0.6, 0.7];
@@ -82,15 +83,15 @@ struct SplitReport {
     at_youden: HardReport,
     /// Same probabilistic block computed on raw KNN vote-share.
     raw: ProbabilisticReport,
-    /// Probabilistic block after Platt scaling fit on val.
+    /// Probabilistic block after Platt scaling fit on the calibration split.
     calibrated: ProbabilisticReport,
 }
 
 #[derive(Debug, Serialize)]
 struct SplitManifest {
     train: Vec<String>,
-    test: Vec<String>,
-    val: Vec<String>,
+    calibration: Vec<String>,
+    holdout: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -115,10 +116,10 @@ struct ClassificationReport {
     n_train: usize,
     platt_a: f32,
     platt_b: f32,
-    test: SplitReport,
-    val: SplitReport,
-    test_predictions: Vec<PerSamplePrediction>,
-    val_predictions: Vec<PerSamplePrediction>,
+    calibration: SplitReport,
+    holdout: SplitReport,
+    calibration_predictions: Vec<PerSamplePrediction>,
+    holdout_predictions: Vec<PerSamplePrediction>,
     split_manifest: SplitManifest,
 }
 
@@ -246,10 +247,10 @@ fn write_subject_probs_csv<'a>(
     path: &Path,
     predictions: impl IntoIterator<Item = &'a PerSamplePrediction>,
 ) -> Result<()> {
-    let mut out = String::from("subject,leaf,roi,y_true,p1_raw,p1_calibrated\n");
+    let mut out = String::from("subject\tleaf\troi\ty_true\tp1_raw\tp1_calibrated\n");
     for p in predictions {
         out.push_str(&format!(
-            "{},{},{},{},{},{}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\n",
             p.subject,
             p.leaf.as_deref().unwrap_or(""),
             p.roi.map(|r| r.to_string()).unwrap_or_default(),
@@ -262,15 +263,13 @@ fn write_subject_probs_csv<'a>(
     Ok(())
 }
 
-/// Stratified row-wise split, train-fit z-score, K-NN with the supplied
-/// distance metric. Computes raw and calibrated per-sample probabilities and
-/// reports the full probabilistic metric suite for both test and val.
-///
-/// Takes `xs` and `ys` by value so the caller's row buffer can be released
-/// as soon as we've drained it into train/test/val splits — for the larger
-/// face-block analyses this is the difference between peak ~2× and peak ~4×
-/// the dataset size.
-pub fn eval_knn_three_way_split(
+/// Shared KNN pipeline — takes pre-computed split indices and runs
+/// normalization, KNN fit, Platt scaling, metric computation, and output.
+#[allow(clippy::too_many_arguments)]
+fn run_knn_pipeline(
+    train_idx: Vec<usize>,
+    calibration_idx: Vec<usize>,
+    holdout_idx: Vec<usize>,
     xs: Vec<Vec<f32>>,
     ys: Vec<Label>,
     groups: &[String],
@@ -280,18 +279,16 @@ pub fn eval_knn_three_way_split(
     source: FeatureSource,
     results_dir: &Path,
 ) -> Result<()> {
-    let (train_idx, test_idx, val_idx) = split_rows_stratified_new(&ys, SEED);
-
     // Pre-compute everything we need from `groups` before we consume `xs`/`ys`,
     // so the per-row iteration that follows can move rows directly into the
     // split buffers without ever holding the original row twice.
     let train_subjects = sorted_unique_subjects(&train_idx, groups);
-    let test_subjects = sorted_unique_subjects(&test_idx, groups);
-    let val_subjects = sorted_unique_subjects(&val_idx, groups);
-    let test_parsed: Vec<(String, Option<String>, Option<usize>)> =
-        test_idx.iter().map(|&i| parse_group(&groups[i])).collect();
-    let val_parsed: Vec<(String, Option<String>, Option<usize>)> =
-        val_idx.iter().map(|&i| parse_group(&groups[i])).collect();
+    let calib_subjects = sorted_unique_subjects(&calibration_idx, groups);
+    let holdout_subjects = sorted_unique_subjects(&holdout_idx, groups);
+    let calib_parsed: Vec<(String, Option<String>, Option<usize>)> =
+        calibration_idx.iter().map(|&i| parse_group(&groups[i])).collect();
+    let holdout_parsed: Vec<(String, Option<String>, Option<usize>)> =
+        holdout_idx.iter().map(|&i| parse_group(&groups[i])).collect();
 
     // Build a per-row destination map: index → (split, slot in split). One
     // pass over `xs.into_iter()` then drains every row into exactly one
@@ -300,8 +297,8 @@ pub fn eval_knn_three_way_split(
     #[derive(Clone, Copy)]
     enum Bucket {
         Train(usize),
-        Test(usize),
-        Val(usize),
+        Calibration(usize),
+        Holdout(usize),
         None,
     }
     let n = ys.len();
@@ -309,20 +306,20 @@ pub fn eval_knn_three_way_split(
     for (slot, &i) in train_idx.iter().enumerate() {
         bucket[i] = Bucket::Train(slot);
     }
-    for (slot, &i) in test_idx.iter().enumerate() {
-        bucket[i] = Bucket::Test(slot);
+    for (slot, &i) in calibration_idx.iter().enumerate() {
+        bucket[i] = Bucket::Calibration(slot);
     }
-    for (slot, &i) in val_idx.iter().enumerate() {
-        bucket[i] = Bucket::Val(slot);
+    for (slot, &i) in holdout_idx.iter().enumerate() {
+        bucket[i] = Bucket::Holdout(slot);
     }
 
     let placeholder_row: Vec<f32> = Vec::new();
     let mut x_train_n: Vec<Vec<f32>> = vec![placeholder_row.clone(); train_idx.len()];
-    let mut x_test_n: Vec<Vec<f32>> = vec![placeholder_row.clone(); test_idx.len()];
-    let mut x_val_n: Vec<Vec<f32>> = vec![placeholder_row; val_idx.len()];
+    let mut x_calib_n: Vec<Vec<f32>> = vec![placeholder_row.clone(); calibration_idx.len()];
+    let mut x_holdout_n: Vec<Vec<f32>> = vec![placeholder_row; holdout_idx.len()];
     let mut y_train: Vec<i32> = vec![0; train_idx.len()];
-    let mut y_test: Vec<i32> = vec![0; test_idx.len()];
-    let mut y_val: Vec<i32> = vec![0; val_idx.len()];
+    let mut y_calib: Vec<i32> = vec![0; calibration_idx.len()];
+    let mut y_holdout: Vec<i32> = vec![0; holdout_idx.len()];
 
     for (i, (row, label)) in xs.into_iter().zip(ys.into_iter()).enumerate() {
         match bucket[i] {
@@ -330,13 +327,13 @@ pub fn eval_knn_three_way_split(
                 x_train_n[s] = row;
                 y_train[s] = label.as_i32();
             }
-            Bucket::Test(s) => {
-                x_test_n[s] = row;
-                y_test[s] = label.as_i32();
+            Bucket::Calibration(s) => {
+                x_calib_n[s] = row;
+                y_calib[s] = label.as_i32();
             }
-            Bucket::Val(s) => {
-                x_val_n[s] = row;
-                y_val[s] = label.as_i32();
+            Bucket::Holdout(s) => {
+                x_holdout_n[s] = row;
+                y_holdout[s] = label.as_i32();
             }
             Bucket::None => {}
         }
@@ -349,8 +346,8 @@ pub fn eval_knn_three_way_split(
     // get here; the live data is the three split Vecs only).
     let normalizer = ZScoreNormalizer::fit_f32(&x_train_n);
     normalizer.transform_f32_inplace(&mut x_train_n);
-    normalizer.transform_f32_inplace(&mut x_test_n);
-    normalizer.transform_f32_inplace(&mut x_val_n);
+    normalizer.transform_f32_inplace(&mut x_calib_n);
+    normalizer.transform_f32_inplace(&mut x_holdout_n);
 
     // Distance-weight votes so the raw probability is smoother than k-step
     // quantisation. This is the change that makes p1_raw a useful input to
@@ -377,50 +374,50 @@ pub fn eval_knn_three_way_split(
             .collect())
     };
 
-    let p1_test_raw = p1(&x_test_n)?;
-    let p1_val_raw = p1(&x_val_n)?;
+    let p1_calib_raw = p1(&x_calib_n)?;
+    let p1_holdout_raw = p1(&x_holdout_n)?;
 
-    drop(x_test_n);
-    drop(x_val_n);
+    drop(x_calib_n);
+    drop(x_holdout_n);
 
-    // Platt: fit on val. Val is the calibration set; test is the held-out
-    // evaluation set we must not touch during scaler fitting.
-    let scaler = PlattScaler::fit(&p1_val_raw, &y_val).unwrap_or(PlattScaler::identity());
-    let p1_test_cal = scaler.transform_slice(&p1_test_raw);
-    let p1_val_cal = scaler.transform_slice(&p1_val_raw);
+    // Platt: fit on test (calibration set). Val is the held-out evaluation
+    // set we must not touch during scaler fitting.
+    let scaler = PlattScaler::fit(&p1_calib_raw, &y_calib).unwrap_or(PlattScaler::identity());
+    let p1_calib_cal = scaler.transform_slice(&p1_calib_raw);
+    let p1_holdout_cal = scaler.transform_slice(&p1_holdout_raw);
 
-    let test_youden_t = youden_optimal_threshold(&y_test, &p1_test_cal);
-    let val_youden_t = youden_optimal_threshold(&y_val, &p1_val_cal);
-    let test_split = SplitReport {
-        n_samples: test_idx.len(),
-        at_0_5: hard_report_at(&y_test, &p1_test_cal, 0.5),
-        at_youden: hard_report_at(&y_test, &p1_test_cal, test_youden_t),
-        raw: prob_report(&y_test, &p1_test_raw),
-        calibrated: prob_report(&y_test, &p1_test_cal),
+    let calib_youden_t = youden_optimal_threshold(&y_calib, &p1_calib_cal);
+    let holdout_youden_t = youden_optimal_threshold(&y_holdout, &p1_holdout_cal);
+    let calibration_split = SplitReport {
+        n_samples: calibration_idx.len(),
+        at_0_5: hard_report_at(&y_calib, &p1_calib_cal, 0.5),
+        at_youden: hard_report_at(&y_calib, &p1_calib_cal, calib_youden_t),
+        raw: prob_report(&y_calib, &p1_calib_raw),
+        calibrated: prob_report(&y_calib, &p1_calib_cal),
     };
-    let val_split = SplitReport {
-        n_samples: val_idx.len(),
-        at_0_5: hard_report_at(&y_val, &p1_val_cal, 0.5),
-        at_youden: hard_report_at(&y_val, &p1_val_cal, val_youden_t),
-        raw: prob_report(&y_val, &p1_val_raw),
-        calibrated: prob_report(&y_val, &p1_val_cal),
+    let holdout_split = SplitReport {
+        n_samples: holdout_idx.len(),
+        at_0_5: hard_report_at(&y_holdout, &p1_holdout_cal, 0.5),
+        at_youden: hard_report_at(&y_holdout, &p1_holdout_cal, holdout_youden_t),
+        raw: prob_report(&y_holdout, &p1_holdout_raw),
+        calibrated: prob_report(&y_holdout, &p1_holdout_cal),
     };
 
     info!(
         analysis,
         source = ?source,
         n_train = train_idx.len(),
-        n_test = test_idx.len(),
-        n_val = val_idx.len(),
-        test_acc_0_5 = format!("{:.2}%", test_split.at_0_5.accuracy * 100.0),
-        test_acc_youden = format!("{:.2}%", test_split.at_youden.accuracy * 100.0),
-        test_brier_cal = format!("{:.4}", test_split.calibrated.brier),
-        test_logloss_cal = format!("{:.4}", test_split.calibrated.log_loss),
-        test_auc_roc_cal = format!("{:.4}", test_split.calibrated.auc_roc),
-        test_auc_pr_cal = format!("{:.4}", test_split.calibrated.auc_pr),
-        test_ece_cal = format!("{:.4}", test_split.calibrated.expected_calibration_error),
-        test_youden_t = format!("{:.3}", test_split.at_youden.threshold),
-        test_cm_youden = ?test_split.at_youden.confusion_matrix,
+        n_calibration = calibration_idx.len(),
+        n_holdout = holdout_idx.len(),
+        holdout_acc_0_5 = format!("{:.2}%", holdout_split.at_0_5.accuracy * 100.0),
+        holdout_acc_youden = format!("{:.2}%", holdout_split.at_youden.accuracy * 100.0),
+        holdout_brier_cal = format!("{:.4}", holdout_split.calibrated.brier),
+        holdout_logloss_cal = format!("{:.4}", holdout_split.calibrated.log_loss),
+        holdout_auc_roc_cal = format!("{:.4}", holdout_split.calibrated.auc_roc),
+        holdout_auc_pr_cal = format!("{:.4}", holdout_split.calibrated.auc_pr),
+        holdout_ece_cal = format!("{:.4}", holdout_split.calibrated.expected_calibration_error),
+        holdout_youden_t = format!("{:.3}", holdout_split.at_youden.threshold),
+        holdout_cm_youden = ?holdout_split.at_youden.confusion_matrix,
         platt_a = scaler.a,
         platt_b = scaler.b,
         "knn probabilistic results"
@@ -429,8 +426,8 @@ pub fn eval_knn_three_way_split(
     fs::create_dir_all(results_dir)?;
     let source_name = source.dir().to_string();
     let metric_name = metric.as_str().to_string();
-    let test_predictions = build_predictions(test_parsed, &y_test, &p1_test_raw, &p1_test_cal);
-    let val_predictions = build_predictions(val_parsed, &y_val, &p1_val_raw, &p1_val_cal);
+    let calibration_predictions = build_predictions(calib_parsed, &y_calib, &p1_calib_raw, &p1_calib_cal);
+    let holdout_predictions = build_predictions(holdout_parsed, &y_holdout, &p1_holdout_raw, &p1_holdout_cal);
 
     let report = ClassificationReport {
         analysis: analysis.to_string(),
@@ -443,14 +440,14 @@ pub fn eval_knn_three_way_split(
         n_train: train_idx.len(),
         platt_a: scaler.a,
         platt_b: scaler.b,
-        test: test_split,
-        val: val_split,
-        test_predictions,
-        val_predictions,
+        calibration: calibration_split,
+        holdout: holdout_split,
+        calibration_predictions,
+        holdout_predictions,
         split_manifest: SplitManifest {
             train: train_subjects,
-            test: test_subjects,
-            val: val_subjects,
+            calibration: calib_subjects,
+            holdout: holdout_subjects,
         },
     };
 
@@ -462,7 +459,7 @@ pub fn eval_knn_three_way_split(
             .with_pair("classifier", "knn")
             .with_pair("k", num_neighbors.to_string())
             .with_pair("metric", metric_name.as_str())
-            .with_pair("run", &format!("{:02}", run_counter));
+            .with_pair("run", format!("{:02}", run_counter).as_str());
 
         let json_filename = base
             .clone()
@@ -471,7 +468,7 @@ pub fn eval_knn_three_way_split(
             .to_filename();
         let csv_filename = base
             .with_suffix("subject_probs")
-            .with_extension(".csv")
+            .with_extension(".tsv")
             .to_filename();
 
         let json_path = results_dir.join(json_filename);
@@ -488,9 +485,9 @@ pub fn eval_knn_three_way_split(
     write_subject_probs_csv(
         &csv_path,
         report
-            .test_predictions
+            .calibration_predictions
             .iter()
-            .chain(report.val_predictions.iter()),
+            .chain(report.holdout_predictions.iter()),
     )?;
 
     info!(
@@ -500,4 +497,117 @@ pub fn eval_knn_three_way_split(
     );
 
     Ok(())
+}
+
+/// Stratified row-wise split, train-fit z-score, K-NN with the supplied
+/// distance metric. Computes raw and calibrated per-sample probabilities and
+/// reports the full probabilistic metric suite for both test and val.
+///
+/// Takes `xs` and `ys` by value so the caller's row buffer can be released
+/// as soon as we've drained it into train/test/val splits — for the larger
+/// face-block analyses this is the difference between peak ~2× and peak ~4×
+/// the dataset size.
+#[allow(clippy::too_many_arguments)]
+pub fn eval_knn_three_way_split(
+    xs: Vec<Vec<f32>>,
+    ys: Vec<Label>,
+    groups: &[String],
+    num_neighbors: usize,
+    metric: DistanceMetric,
+    analysis: &str,
+    source: FeatureSource,
+    results_dir: &Path,
+) -> Result<()> {
+    let (train_idx, calibration_idx, holdout_idx) = split_rows_stratified_new(&ys, SEED);
+    run_knn_pipeline(
+        train_idx,
+        calibration_idx,
+        holdout_idx,
+        xs,
+        ys,
+        groups,
+        num_neighbors,
+        metric,
+        analysis,
+        source,
+        results_dir,
+    )
+}
+
+/// Subject-disjoint split: all rows for a given subject land in exactly one
+/// of train / calibration / holdout. Prevents KNN from retrieving same-subject
+/// neighbors across the split boundary.
+///
+/// Subjects are balanced across classes (majority truncated) then 70/15/15
+/// train/calibration/holdout at the subject level using the shared
+/// `split_subjects_stratified` helper. Otherwise identical pipeline to
+/// `eval_knn_three_way_split`.
+#[allow(clippy::too_many_arguments)]
+pub fn eval_knn_three_way_split_subject_aware(
+    xs: Vec<Vec<f32>>,
+    ys: Vec<Label>,
+    groups: &[String],
+    num_neighbors: usize,
+    metric: DistanceMetric,
+    analysis: &str,
+    source: FeatureSource,
+    results_dir: &Path,
+) -> Result<()> {
+    // Derive subject→label map from ys + groups (first occurrence wins).
+    let mut subject_label: HashMap<String, Label> = HashMap::new();
+    for (group, &label) in groups.iter().zip(ys.iter()) {
+        let subj = parse_subject(group);
+        subject_label.entry(subj).or_insert(label);
+    }
+
+    let mut controls: Vec<String> = Vec::new();
+    let mut anhedonics: Vec<String> = Vec::new();
+    for (subj, label) in &subject_label {
+        match label {
+            Label::Control => controls.push(subj.clone()),
+            Label::Anhedonic => anhedonics.push(subj.clone()),
+        }
+    }
+    controls.sort();
+    anhedonics.sort();
+
+    let (train_s, calib_s, holdout_s) = split_subjects_stratified(&controls, &anhedonics, SEED);
+    let train_set: HashSet<String> = train_s.into_iter().collect();
+    let calib_set: HashSet<String> = calib_s.into_iter().collect();
+    let holdout_set: HashSet<String> = holdout_s.into_iter().collect();
+
+    let mut train_idx: Vec<usize> = Vec::new();
+    let mut calib_idx: Vec<usize> = Vec::new();
+    let mut holdout_idx: Vec<usize> = Vec::new();
+    for (i, group) in groups.iter().enumerate() {
+        let subj = parse_subject(group);
+        if train_set.contains(&subj) {
+            train_idx.push(i);
+        } else if calib_set.contains(&subj) {
+            calib_idx.push(i);
+        } else if holdout_set.contains(&subj) {
+            holdout_idx.push(i);
+        }
+    }
+
+    if train_idx.is_empty() {
+        anyhow::bail!(
+            "subject-stratified split produced empty training set for analysis `{analysis}` / source `{:?}`",
+            source
+        );
+    }
+
+    run_knn_pipeline(
+        train_idx,
+        calib_idx,
+        holdout_idx,
+        xs,
+        ys,
+        groups,
+        num_neighbors,
+        metric,
+        analysis,
+        source,
+        results_dir,
+    )
 }
