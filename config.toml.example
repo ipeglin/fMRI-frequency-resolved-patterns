@@ -37,7 +37,7 @@ dump_intermediates = false
 voxelwise_zscore = false
 
 [hht]
-num_modes = 12
+num_modes = 10
 alpha = 1000.0          # MVMD penalty term (bandwidth constraint per mode)
 admm_tolerance = 1e-8   # ADMM convergence stopping criterion
 admm_tau = 1e-3         # ADMM dual ascent step size
