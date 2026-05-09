@@ -46,10 +46,10 @@ pub fn propagate_roi_attrs(src: &hdf5::Location, dest: &hdf5::Location) -> Resul
             attrs.push(H5Attr::string(name, v));
         }
     }
-    if dest.attr("n_rois").is_err() {
-        if let Some(v) = read_u32_attr(src, "n_rois")? {
-            attrs.push(H5Attr::u32("n_rois", v));
-        }
+    if dest.attr("n_rois").is_err()
+        && let Some(v) = read_u32_attr(src, "n_rois")?
+    {
+        attrs.push(H5Attr::u32("n_rois", v));
     }
     if !attrs.is_empty() {
         write_attrs(dest, &attrs)?;

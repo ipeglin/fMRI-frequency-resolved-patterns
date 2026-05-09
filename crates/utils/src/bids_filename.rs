@@ -11,25 +11,13 @@ use std::{
 /// Each underscore-separated token containing a `-` is a key-value entity.
 /// A trailing token without `-` is the suffix (e.g., `bold`, `events`).
 /// Extensions are preserved separately, with `.nii.gz` treated as a unit.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct BidsFilename {
     pub pairs: Vec<(String, String)>,
     pub suffix: Option<String>,
     pub extension: Option<String>,
     pub path: Option<PathBuf>,
     pub parent_directory: Option<PathBuf>,
-}
-
-impl Default for BidsFilename {
-    fn default() -> Self {
-        Self {
-            pairs: Vec::new(),
-            suffix: None,
-            extension: None,
-            path: None,
-            parent_directory: None,
-        }
-    }
 }
 
 impl fmt::Display for BidsFilename {
@@ -117,7 +105,7 @@ impl BidsFilename {
         }
     }
 
-    pub fn from_path_buf(path: &PathBuf) -> Self {
+    pub fn from_path_buf(path: &Path) -> Self {
         let s = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         let (stem, ext) = strip_bids_extension(s);
 
@@ -139,7 +127,7 @@ impl BidsFilename {
             } else {
                 Some(ext.to_string())
             },
-            path: Some(path.clone()),
+            path: Some(path.to_path_buf()),
             parent_directory: path.parent().map(|p| p.to_path_buf()),
         }
     }
@@ -257,7 +245,7 @@ impl BidsFilename {
 
     /// Checks if the *original* path (if one was provided via from_path_buf) exists.
     pub fn original_exists(&self) -> bool {
-        self.path.as_ref().map_or(false, |p| p.exists())
+        self.path.as_ref().is_some_and(|p| p.exists())
     }
 }
 
@@ -288,8 +276,8 @@ pub fn find_bids_files(
             };
             let bids = BidsFilename::parse(name);
             required_pairs.iter().all(|(k, v)| bids.matches_pair(k, v))
-                && suffix.map_or(true, |s| bids.suffix.as_deref() == Some(s))
-                && extension.map_or(true, |e| bids.extension.as_deref() == Some(e))
+                && suffix.is_none_or(|s| bids.suffix.as_deref() == Some(s))
+                && extension.is_none_or(|e| bids.extension.as_deref() == Some(e))
         })
         .collect()
 }

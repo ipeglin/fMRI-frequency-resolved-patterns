@@ -128,7 +128,7 @@ impl BrainAtlas {
         self.find_indices(|e| {
             if let RoiType::Cortical { network, .. } = &e.metadata {
                 let match_name = network == name;
-                let match_hemi = hemi.map_or(true, |h| h == e.hemisphere);
+                let match_hemi = hemi.is_none_or(|h| h == e.hemisphere);
                 match_name && match_hemi
             } else {
                 false
@@ -139,7 +139,7 @@ impl BrainAtlas {
     pub fn find_cortical_by_region(&self, region_name: &str, hemi: Option<Hemisphere>) -> Vec<u32> {
         self.find_indices(|e| {
             if let RoiType::Cortical { region, .. } = &e.metadata {
-                region == region_name && hemi.map_or(true, |h| h == e.hemisphere)
+                region == region_name && hemi.is_none_or(|h| h == e.hemisphere)
             } else {
                 false
             }
@@ -153,7 +153,7 @@ impl BrainAtlas {
     ) -> Vec<u32> {
         self.find_indices(|e| {
             if let RoiType::Subcortical { region, .. } = &e.metadata {
-                region == region_name && hemi.map_or(true, |h| h == e.hemisphere)
+                region == region_name && hemi.is_none_or(|h| h == e.hemisphere)
             } else {
                 false
             }
@@ -228,23 +228,17 @@ impl BrainAtlas {
                         None
                     }
                 }
-                RoiType::Subcortical { region, .. } => {
-                    if let Some(matched) = spec
-                        .subcortical_regions
-                        .iter()
-                        .find(|pat| region.contains(pat.as_str()))
-                    {
-                        Some(SelectedRoi {
-                            row_index: self.n_cortical + e.index as usize,
-                            label: e.id.clone(),
-                            matched_region: matched.clone(),
-                            hemisphere: e.hemisphere,
-                            kind: "subcortical",
-                        })
-                    } else {
-                        None
-                    }
-                }
+                RoiType::Subcortical { region, .. } => spec
+                    .subcortical_regions
+                    .iter()
+                    .find(|pat| region.contains(pat.as_str()))
+                    .map(|matched| SelectedRoi {
+                        row_index: self.n_cortical + e.index as usize,
+                        label: e.id.clone(),
+                        matched_region: matched.clone(),
+                        hemisphere: e.hemisphere,
+                        kind: "subcortical",
+                    }),
             })
             .collect();
         out.sort_by_key(|r| r.row_index);

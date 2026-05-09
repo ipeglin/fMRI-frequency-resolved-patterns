@@ -201,15 +201,12 @@ pub fn recreate_group(parent: &hdf5::Group, name: &str) -> Result<hdf5::Group> {
 /// If `force` is `true` and the group already exists it is unlinked first,
 /// so the returned group is always empty.
 pub fn open_or_create_group(parent: &hdf5::Group, name: &str, force: bool) -> Result<hdf5::Group> {
-    match parent.group(name) {
-        Ok(existing) => {
-            if !force {
-                return Ok(existing);
-            }
-            drop(existing);
-            parent.unlink(name)?;
+    if let Ok(existing) = parent.group(name) {
+        if !force {
+            return Ok(existing);
         }
-        Err(_) => {}
+        drop(existing);
+        parent.unlink(name)?;
     }
     // If create_group fails because the name is still present in the symbol table
     // (e.g. a previous run crashed after writing the link but before flushing), fall
@@ -363,6 +360,7 @@ pub fn read_dataset<T: hdf5::H5Type>(
 /// Useful for simple one-dataset-per-group writes without opening the file
 /// manually.  For writing multiple datasets to the same group use
 /// `open_or_create` + `open_or_create_group` + `write_dataset` directly.
+#[allow(clippy::too_many_arguments)]
 pub fn append<T: hdf5::H5Type>(
     path: &Path,
     group_name: &str,

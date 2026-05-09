@@ -5,5 +5,6 @@ pub mod bids_subject_id;
 pub mod config;
 pub mod frequency_bands;
 pub mod hdf5_io;
+pub mod intermediates;
 pub mod polars_csv;
 pub mod roi_migration;
