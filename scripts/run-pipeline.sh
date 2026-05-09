@@ -6,8 +6,7 @@
 # 01. parcellate-bold
 # 02. segment-trials
 # 03. cwt
-# 04. decompose-mvmd
-# 05. hht
+# 04. hht
 # 06. fc
 # 07. feature-extraction
 # 08. split-data
@@ -80,8 +79,7 @@ run_stage "00" "select-subjects"
 run_stage "01" "parcellate-bold"
 run_stage "02" "segment-trials"
 run_stage "03" "cwt"
-run_stage "04" "mvmd"
-run_stage "05" "hht"
+run_stage "04" "hht"
 run_stage "06" "fc"
 run_stage "07" "feature-extraction"
 run_stage "08" "classify"
