@@ -15,6 +15,9 @@ subject_filter_dir = ""
 task_regressors_output_dir = ""
 data_splitting_output_dir = ""
 classification_results_dir = ""
+# Root directory for diagnostic TSV dumps (BIDS-ish naming, sub-dirs per stage).
+# Only written when dump_intermediates = true.
+intermediates_output_dir = "out/intermediates"
 
 # Atlas Files
 cortical_atlas = ""
@@ -25,12 +28,31 @@ subcortical_atlas_lut = ""
 # Run params
 force = false
 dry_run = false
+# Write per-stage diagnostic TSV files to intermediates_output_dir.
+# Enables plotting of mode PSDs, IF distributions, confounds etc. for
+# hyperparameter analysis (num_modes, alpha, tau). Default false.
+dump_intermediates = false
 
 [parcellation]
 voxelwise_zscore = false
 
-[mvmd]
+[hht]
 num_modes = 12
+alpha = 1000.0          # MVMD penalty term (bandwidth constraint per mode)
+admm_tolerance = 1e-8   # ADMM convergence stopping criterion
+admm_tau = 1e-3         # ADMM dual ascent step size
+admm_max_iterations = 500 # ADMM iteration cap
+
+# Noise-Assisted MVMD (NA-MVMD) — more robust to choice of K, but slower per iter.
+# Outputs written to separate HDF5 groups (full_run_std_na / blocks_std_na) so
+# classic and NA results coexist on disk.
+na_mvmd = false          # set true to enable NA-MVMD
+noise_channels = 1       # WGN channels appended (N); 1 is usually sufficient
+noise_std_ratio = 1.0    # noise std relative to mean per-channel signal std
+noise_seed = 13369326    # RNG seed for reproducible noise realizations
+gcs_smoothing_window = 5 # Welch-style freq smoothing window (odd, ≥3)
+gcs_power_iters = 20     # power-iteration cap per (mode, freq bin)
+gcs_power_tol = 1e-6     # power-iteration early-exit tolerance
 
 [feature_extraction]
 cnn_weights_path = ""
@@ -40,7 +62,7 @@ knn_num_neighbors = 3
 knn_metric = "cosine" # cosine | euclidean | mahalanobis | mahalanobis_diag
 
 # Single source of truth for which atlas rows the spec-dependent stages
-# (04mvmd `_roi`, 05hilbert `_roi`, 06fc `_roi`, 07feature_extraction)
+# (04hht `_roi`, 06fc `_roi`, 07feature_extraction)
 # operate on. Cortical regions match exactly against the Yeo region label
 # (e.g. "PFCm"). Cortical networks match exactly against the Yeo network
 # label (e.g. "LimbicA", "LimbicB", "DefaultA"); when both `cortical_regions`

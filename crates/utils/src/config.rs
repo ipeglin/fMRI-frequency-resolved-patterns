@@ -27,18 +27,27 @@ pub struct AppConfig {
     /// Directory where classification runners write per-analysis JSON results
     /// (one file per `<analysis>__<source>.json`) for downstream plotting.
     pub classification_results_dir: PathBuf,
+    /// Root directory for diagnostic TSV dumps (gated by `dump_intermediates`).
+    /// Sub-directories are created per pipeline stage (e.g. `01fmri_parcellation/`,
+    /// `04hht/`). Files are named with BIDS-ish `desc-` entities.
+    #[serde(default = "default_intermediates_output_dir")]
+    pub intermediates_output_dir: PathBuf,
 
     // Global behavior flags
     #[serde(default)]
     pub force: bool,
     #[serde(default)]
     pub dry_run: bool,
+    /// Write diagnostic TSV files for each pipeline stage. Files land in
+    /// `intermediates_output_dir/<stage>/` with BIDS-ish naming. Default false.
+    #[serde(default)]
+    pub dump_intermediates: bool,
 
     // Stage-local params
     #[serde(default)]
     pub parcellation: ParcellationParams,
     #[serde(default)]
-    pub mvmd: MvmdParams,
+    pub hht: HhtParams,
     #[serde(default)]
     pub feature_extraction: FeatureExtractionParams,
     #[serde(default)]
@@ -93,16 +102,22 @@ impl Default for AppConfig {
             subcortical_atlas_lut: PathBuf::from("/path/to/subcortical_atlas_lut"),
             data_splitting_output_dir: PathBuf::from("/path/to/data_split"),
             classification_results_dir: PathBuf::from("/path/to/classification_results"),
+            intermediates_output_dir: default_intermediates_output_dir(),
             tcp_annex_remote: String::new(),
             force: false,
             dry_run: false,
+            dump_intermediates: false,
             parcellation: ParcellationParams::default(),
-            mvmd: MvmdParams::default(),
+            hht: HhtParams::default(),
             feature_extraction: FeatureExtractionParams::default(),
             classification: ClassificationParams::default(),
             roi_selection: RoiSelectionSpec::default(),
         }
     }
+}
+
+fn default_intermediates_output_dir() -> PathBuf {
+    PathBuf::from("out/intermediates")
 }
 
 impl fmt::Display for AppConfig {
@@ -157,14 +172,25 @@ impl fmt::Display for AppConfig {
             "  classification_results_dir: {}",
             self.classification_results_dir.display()
         )?;
+        writeln!(
+            f,
+            "  intermediates_output_dir: {}",
+            self.intermediates_output_dir.display()
+        )?;
         writeln!(f, "  force: {}", self.force)?;
         writeln!(f, "  dry_run: {}", self.dry_run)?;
+        writeln!(f, "  dump_intermediates: {}", self.dump_intermediates)?;
+        writeln!(
+            f,
+            "  parcellation.standardize: {}",
+            self.parcellation.standardize
+        )?;
         writeln!(
             f,
             "  parcellation.voxelwise_zscore: {}",
             self.parcellation.voxelwise_zscore
         )?;
-        writeln!(f, "  mvmd.num_modes: {}", self.mvmd.num_modes)?;
+        writeln!(f, "  hht.num_modes: {}", self.hht.num_modes)?;
         match &self.feature_extraction.cnn_weights_path {
             Some(p) => writeln!(f, "  feature_extraction.cnn_weights_path: {}", p.display())?,
             None => writeln!(f, "  feature_extraction.cnn_weights_path: <random init>")?,
@@ -182,29 +208,151 @@ impl fmt::Display for AppConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParcellationParams {
-    /// Apply voxel-wise z-score normalization before parcellation. Produces
-    /// additional HDF5 datasets (`tcp_cortical_voxelzscore`, etc.) alongside
-    /// the raw outputs.
+    /// Apply per-ROI z-score standardization (sample std, ddof=1) to the
+    /// parcellated timeseries after ROI averaging. Matches nilearn
+    /// `NiftiLabelsMasker(standardize="zscore_sample")`. Default true.
+    #[serde(default = "default_parcellation_standardize")]
+    pub standardize: bool,
+    /// Apply voxel-wise z-score normalization **before** parcellation. Each
+    /// voxel's timeseries is independently normalized by its own temporal mean
+    /// and std prior to ROI averaging. Expensive — adds significant wall time.
+    /// Opt-in only (default false).
     #[serde(default)]
     pub voxelwise_zscore: bool,
+}
+
+fn default_parcellation_standardize() -> bool {
+    true
 }
 
 impl Default for ParcellationParams {
     fn default() -> Self {
         Self {
+            standardize: default_parcellation_standardize(),
             voxelwise_zscore: false,
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MvmdParams {
-    pub num_modes: usize,
+/// Single-source default values for ADMM and MVMD parameters.
+pub mod defaults {
+    pub const ADMM_TOLERANCE: f64 = 1e-8;
+    pub const ADMM_TAU: f64 = 1e-3;
+    pub const ADMM_MAX_ITERATIONS: usize = 500;
+    pub const MVMD_ALPHA: f64 = 1000.0;
 }
 
-impl Default for MvmdParams {
+fn default_hht_num_modes() -> usize {
+    10
+}
+fn default_hht_log_amp() -> bool {
+    true
+}
+fn default_hht_envelope_normalize() -> bool {
+    true
+}
+fn default_mvmd_alpha() -> f64 {
+    defaults::MVMD_ALPHA
+}
+fn default_admm_tolerance() -> f64 {
+    defaults::ADMM_TOLERANCE
+}
+fn default_admm_tau() -> f64 {
+    defaults::ADMM_TAU
+}
+fn default_admm_max_iterations() -> usize {
+    defaults::ADMM_MAX_ITERATIONS
+}
+fn default_na_mvmd() -> bool {
+    false
+}
+fn default_noise_channels() -> usize {
+    1
+}
+fn default_noise_std_ratio() -> f64 {
+    1.0
+}
+fn default_noise_seed() -> u64 {
+    0x00C0_FFEE
+}
+fn default_gcs_smoothing_window() -> usize {
+    5
+}
+fn default_gcs_power_iters() -> usize {
+    20
+}
+fn default_gcs_power_tol() -> f64 {
+    1e-6
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HhtParams {
+    /// Number of MVMD modes (K).
+    #[serde(default = "default_hht_num_modes")]
+    pub num_modes: usize,
+    /// MVMD penalty term (alpha).
+    #[serde(default = "default_mvmd_alpha")]
+    pub alpha: f64,
+    /// ADMM tolerance.
+    #[serde(default = "default_admm_tolerance")]
+    pub admm_tolerance: f64,
+    /// ADMM step-size (tau).
+    #[serde(default = "default_admm_tau")]
+    pub admm_tau: f64,
+    /// ADMM max iterations.
+    #[serde(default = "default_admm_max_iterations")]
+    pub admm_max_iterations: usize,
+    /// Apply log1p amplitude compression to the HHT envelope before normalization.
+    /// Compresses raw dynamic range before per-channel max-divide.
+    #[serde(default = "default_hht_log_amp")]
+    pub hht_log_amp: bool,
+    /// Normalize HHT envelope per-channel (divide each channel across all modes
+    /// and timepoints by its maximum). Bounds the per-channel spectrogram in [0, 1].
+    #[serde(default = "default_hht_envelope_normalize")]
+    pub hht_envelope_normalize: bool,
+    /// Enable Noise-Assisted MVMD (NA-MVMD). Appends WGN channels to improve
+    /// spectral partition robustness and replaces the omega centroid update with
+    /// the Generalized Cross-Spectrum (GCS) centroid.
+    #[serde(default = "default_na_mvmd")]
+    pub na_mvmd: bool,
+    /// Number of White Gaussian Noise channels to append (N). Only used when na_mvmd = true.
+    #[serde(default = "default_noise_channels")]
+    pub noise_channels: usize,
+    /// Noise standard deviation relative to the mean per-channel signal std.
+    #[serde(default = "default_noise_std_ratio")]
+    pub noise_std_ratio: f64,
+    /// RNG seed for deterministic noise generation.
+    #[serde(default = "default_noise_seed")]
+    pub noise_seed: u64,
+    /// Frequency-smoothing window size (odd, ≥3) for the GCS cross-spectral matrix estimator.
+    #[serde(default = "default_gcs_smoothing_window")]
+    pub gcs_smoothing_window: usize,
+    /// Maximum power-iteration steps per (mode, frequency bin) in GCS update.
+    #[serde(default = "default_gcs_power_iters")]
+    pub gcs_power_iters: usize,
+    /// Power-iteration early-exit tolerance.
+    #[serde(default = "default_gcs_power_tol")]
+    pub gcs_power_tol: f64,
+}
+
+impl Default for HhtParams {
     fn default() -> Self {
-        Self { num_modes: 10 }
+        Self {
+            num_modes: default_hht_num_modes(),
+            alpha: default_mvmd_alpha(),
+            admm_tolerance: default_admm_tolerance(),
+            admm_tau: default_admm_tau(),
+            admm_max_iterations: default_admm_max_iterations(),
+            hht_log_amp: default_hht_log_amp(),
+            hht_envelope_normalize: default_hht_envelope_normalize(),
+            na_mvmd: default_na_mvmd(),
+            noise_channels: default_noise_channels(),
+            noise_std_ratio: default_noise_std_ratio(),
+            noise_seed: default_noise_seed(),
+            gcs_smoothing_window: default_gcs_smoothing_window(),
+            gcs_power_iters: default_gcs_power_iters(),
+            gcs_power_tol: default_gcs_power_tol(),
+        }
     }
 }
 
@@ -216,41 +364,26 @@ impl Default for MvmdParams {
 ///
 /// `Resize`: bicubic upsample/downsample to `224×224`. Compromises granularity
 /// but exposes the full receptive field. Kept as an opt-in for ablation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageFitMode {
+    #[default]
     Pad,
     Resize,
-}
-
-impl Default for ImageFitMode {
-    fn default() -> Self {
-        Self::Pad
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeatureExtractionParams {
     #[serde(default)]
     pub cnn_weights_path: Option<PathBuf>,
-    /// Apply log1p amplitude compression to HHT spectrograms before min-max
-    /// normalization. Recommended: heavy-tailed Hilbert spectra benefit from
-    /// log compression to preserve granularity in low-amplitude bins.
-    #[serde(default = "default_hht_log_amp")]
-    pub hht_log_amp: bool,
     #[serde(default)]
     pub image_fit: ImageFitMode,
-}
-
-fn default_hht_log_amp() -> bool {
-    true
 }
 
 impl Default for FeatureExtractionParams {
     fn default() -> Self {
         Self {
             cnn_weights_path: Some(PathBuf::from("cnn_model_weights/densenet201_imagenet.pt")),
-            hht_log_amp: default_hht_log_amp(),
             image_fit: ImageFitMode::default(),
         }
     }
@@ -308,7 +441,7 @@ mod tests {
         assert_eq!(cfg.consolidated_data_dir.to_str().unwrap(), "/b");
         assert_eq!(cfg.tcp_repo_dir.to_str().unwrap(), "/t");
         assert!(!cfg.force);
-        assert_eq!(cfg.mvmd.num_modes, 10);
+        assert_eq!(cfg.hht.num_modes, 10);
     }
 
     #[test]
@@ -329,14 +462,14 @@ mod tests {
             classification_results_dir = "/cr"
             tcp_annex_remote = "uuid"
 
-            [mvmd]
+            [hht]
             num_modes = 20
 
             [parcellation]
             voxelwise_zscore = true
         "#;
         let cfg: AppConfig = toml::from_str(toml).unwrap();
-        assert_eq!(cfg.mvmd.num_modes, 20);
+        assert_eq!(cfg.hht.num_modes, 20);
         assert!(cfg.parcellation.voxelwise_zscore);
     }
 
