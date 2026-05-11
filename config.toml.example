@@ -43,13 +43,13 @@ admm_max_iterations = 500 # ADMM iteration cap
 # Noise-Assisted MVMD (NA-MVMD) — more robust to choice of K, but slower per iter.
 # Outputs written to separate HDF5 groups (full_run_std_na / blocks_std_na) so
 # classic and NA results coexist on disk.
+# Follows the reference na_mvmd.m: per-channel unit-variance normalize, append WGN,
+# apply GCS single-snapshot centroid for omega update, rescale modes by original std.
 na_mvmd = false          # set true to enable NA-MVMD
 noise_channels = 1       # WGN channels appended (N); 1 is usually sufficient
-noise_std_ratio = 1.0    # noise std relative to mean per-channel signal std
+noise_std_ratio = 0.8    # noise std relative to unit-variance channels (matches reference 0.8)
 noise_seed = 13369326    # RNG seed for reproducible noise realizations
-gcs_smoothing_window = 5 # Welch-style freq smoothing window (odd, ≥3)
-gcs_power_iters = 20     # power-iteration cap per (mode, freq bin)
-gcs_power_tol = 1e-6     # power-iteration early-exit tolerance
+frequency_init = "exponential" # omega init: zero | linear | exponential (log-spaced, recommended)
 
 [feature_extraction]
 cnn_weights_path = ""
