@@ -28,7 +28,7 @@ dry_run = false
 # Write per-stage diagnostic TSV files to intermediates_output_dir.
 # Enables plotting of mode PSDs, IF distributions, confounds etc. for
 # hyperparameter analysis (num_modes, alpha, tau). Default false.
-dump_intermediates = false
+dump_intermediates = true
 
 [parcellation]
 voxelwise_zscore = false
@@ -55,7 +55,7 @@ gcs_power_tol = 1e-6     # power-iteration early-exit tolerance
 cnn_weights_path = ""
 
 [classification]
-knn_num_neighbors = 3
+knn_num_neighbors = 11
 knn_metric = "cosine" # cosine | euclidean | mahalanobis | mahalanobis_diag
 
 # Single source of truth for which atlas rows the spec-dependent stages
