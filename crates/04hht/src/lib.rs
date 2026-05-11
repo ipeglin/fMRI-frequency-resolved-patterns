@@ -200,11 +200,15 @@ fn write_hht_group(
     modes: &ndarray::Array3<f64>,
     center_frequencies: &[f64],
     num_iterations: u32,
+    converged: bool,
     hht: &HHTResult,
     alpha: f64,
     admm_config: &ADMMConfig,
 ) -> Result<()> {
-    write_attrs(dest, &[H5Attr::u32("num_iterations", num_iterations)])?;
+    write_attrs(dest, &[
+        H5Attr::u32("num_iterations", num_iterations),
+        H5Attr::u32("converged", converged as u32),
+    ])?;
 
     // Always-write: modes + center_frequencies attr
     let m_shape = modes.shape();
@@ -334,6 +338,7 @@ fn process_signal_group(
     let mvmd_start = Instant::now();
     let decomp = mvmd.decompose(num_modes);
     let mvmd_ms = mvmd_start.elapsed().as_millis();
+    let converged = decomp.num_iterations < admm_config.max_iterations;
 
     info!(
         task_name,
@@ -342,6 +347,7 @@ fn process_signal_group(
         n_channels = decomp.modes.shape()[1],
         n_timepoints = decomp.modes.shape()[2],
         mvmd_ms,
+        converged,
         "MVMD decomposition complete, computing HHT"
     );
 
@@ -358,6 +364,7 @@ fn process_signal_group(
         &decomp.modes,
         decomp.center_frequencies.as_slice().unwrap(),
         decomp.num_iterations,
+        converged,
         &hht_result,
         alpha,
         admm_config,
