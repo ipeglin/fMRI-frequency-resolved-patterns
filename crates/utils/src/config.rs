@@ -35,6 +35,10 @@ pub struct AppConfig {
     pub force: bool,
     #[serde(default)]
     pub dry_run: bool,
+    /// When true, subjects must have a `task-restAP_run-01` file to qualify for
+    /// inclusion. When false (default), any `task-restAP` run is sufficient.
+    #[serde(default)]
+    pub restap_run01_only: bool,
     /// Write diagnostic TSV files for each pipeline stage. Files land in
     /// `intermediates_output_dir/<stage>/` with BIDS-ish naming. Default false.
     #[serde(default)]
@@ -100,6 +104,7 @@ impl Default for AppConfig {
             tcp_annex_remote: String::new(),
             force: false,
             dry_run: false,
+            restap_run01_only: false,
             dump_intermediates: false,
             parcellation: ParcellationParams::default(),
             hht: HhtParams::default(),
@@ -162,6 +167,7 @@ impl fmt::Display for AppConfig {
         )?;
         writeln!(f, "  force: {}", self.force)?;
         writeln!(f, "  dry_run: {}", self.dry_run)?;
+        writeln!(f, "  restap_run01_only: {}", self.restap_run01_only)?;
         writeln!(f, "  dump_intermediates: {}", self.dump_intermediates)?;
         writeln!(
             f,
@@ -366,6 +372,28 @@ pub struct FeatureExtractionParams {
     pub cnn_weights_path: Option<PathBuf>,
     #[serde(default)]
     pub image_fit: ImageFitMode,
+    /// Also produce a frequency-smoothed Hilbert spectrum (`hht_smoothed` /
+    /// `hht_roi_smoothed`) alongside the skeleton. Smoothing uses a per-segment
+    /// moving average along the frequency axis only (time axis untouched), with
+    /// kernel width derived from Huang's optimal cell count `N = round(n_t / 5)`.
+    /// Default true.
+    #[serde(default = "default_hht_smoothed")]
+    pub hht_smoothed: bool,
+    /// Also produce instantaneous energy analyses (`hht_ie` / `hht_roi_ie`).
+    /// IE(t) = Σ_ω H²(ω, t) collapses frequency → a per-ROI power time-series,
+    /// encoded as a 224-level one-hot amplitude image for DenseNet input.
+    /// Computed from the skeleton spectrum (H = amplitude after log1p/normalize).
+    /// Default true.
+    #[serde(default = "default_hht_ie")]
+    pub hht_ie: bool,
+}
+
+fn default_hht_smoothed() -> bool {
+    true
+}
+
+fn default_hht_ie() -> bool {
+    true
 }
 
 impl Default for FeatureExtractionParams {
@@ -373,6 +401,8 @@ impl Default for FeatureExtractionParams {
         Self {
             cnn_weights_path: Some(PathBuf::from("cnn_model_weights/densenet201_imagenet.pt")),
             image_fit: ImageFitMode::default(),
+            hht_smoothed: default_hht_smoothed(),
+            hht_ie: default_hht_ie(),
         }
     }
 }

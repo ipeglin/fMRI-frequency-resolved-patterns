@@ -25,6 +25,9 @@ subcortical_atlas_lut = ""
 # Run params
 force = false
 dry_run = false
+# When true, a subject must have a task-restAP_run-01 file to qualify for
+# inclusion. When false (default), any task-restAP run is sufficient.
+restap_run01_only = false
 # Write per-stage diagnostic TSV files to intermediates_output_dir.
 # Enables plotting of mode PSDs, IF distributions, confounds etc. for
 # hyperparameter analysis (num_modes, alpha, tau). Default false.
@@ -53,6 +56,8 @@ frequency_init = "exponential" # omega init: zero | linear | exponential (log-sp
 
 [feature_extraction]
 cnn_weights_path = ""
+hht_smoothed = true  # produce frequency-smoothed HHT analyses (hht_smoothed / hht_roi_smoothed)
+hht_ie = true        # produce instantaneous energy analyses IE(t) = Σ_ω H²(ω,t) (hht_ie / hht_roi_ie)
 
 [classification]
 knn_num_neighbors = 11
