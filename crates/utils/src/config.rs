@@ -253,19 +253,29 @@ fn default_noise_channels() -> usize {
     1
 }
 fn default_noise_std_ratio() -> f64 {
-    1.0
+    0.8
 }
 fn default_noise_seed() -> u64 {
     0x00C0_FFEE
 }
-fn default_gcs_smoothing_window() -> usize {
-    5
+fn default_frequency_init() -> FrequencyInitConfig {
+    FrequencyInitConfig::Exponential
 }
-fn default_gcs_power_iters() -> usize {
-    20
-}
-fn default_gcs_power_tol() -> f64 {
-    1e-6
+
+/// Initialization method for MVMD center frequencies.
+///
+/// Matches the `FrequencyInit` enum in the `04hht` crate; defined here so
+/// config deserialization does not depend on that crate.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FrequencyInitConfig {
+    /// All omegas start at 0 (classic VMD convention).
+    Zero,
+    /// Omegas linearly spaced in [0, 0.5].
+    Linear,
+    /// Omegas log-spaced in [0, 0.5] — reference NA-MVMD init.
+    #[default]
+    Exponential,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -293,29 +303,26 @@ pub struct HhtParams {
     /// and timepoints by its maximum). Bounds the per-channel spectrogram in [0, 1].
     #[serde(default = "default_hht_envelope_normalize")]
     pub hht_envelope_normalize: bool,
-    /// Enable Noise-Assisted MVMD (NA-MVMD). Appends WGN channels to improve
-    /// spectral partition robustness and replaces the omega centroid update with
-    /// the Generalized Cross-Spectrum (GCS) centroid.
+    /// Enable Noise-Assisted MVMD (NA-MVMD). Normalizes each input channel to
+    /// unit variance, appends WGN channels, applies the Generalized Cross-Spectrum
+    /// (GCS) single-snapshot centroid for the omega update, then rescales output
+    /// modes by the original per-channel std.
     #[serde(default = "default_na_mvmd")]
     pub na_mvmd: bool,
     /// Number of White Gaussian Noise channels to append (N). Only used when na_mvmd = true.
     #[serde(default = "default_noise_channels")]
     pub noise_channels: usize,
-    /// Noise standard deviation relative to the mean per-channel signal std.
+    /// Noise standard deviation relative to per-channel unit-variance-normalized signal.
+    /// Matches the reference `na_mvmd.m` default of 0.8.
     #[serde(default = "default_noise_std_ratio")]
     pub noise_std_ratio: f64,
     /// RNG seed for deterministic noise generation.
     #[serde(default = "default_noise_seed")]
     pub noise_seed: u64,
-    /// Frequency-smoothing window size (odd, ≥3) for the GCS cross-spectral matrix estimator.
-    #[serde(default = "default_gcs_smoothing_window")]
-    pub gcs_smoothing_window: usize,
-    /// Maximum power-iteration steps per (mode, frequency bin) in GCS update.
-    #[serde(default = "default_gcs_power_iters")]
-    pub gcs_power_iters: usize,
-    /// Power-iteration early-exit tolerance.
-    #[serde(default = "default_gcs_power_tol")]
-    pub gcs_power_tol: f64,
+    /// Center-frequency initialization method for MVMD.
+    /// `exponential` (log-spaced) matches the reference NA-MVMD initialization.
+    #[serde(default = "default_frequency_init")]
+    pub frequency_init: FrequencyInitConfig,
 }
 
 impl Default for HhtParams {
@@ -332,9 +339,7 @@ impl Default for HhtParams {
             noise_channels: default_noise_channels(),
             noise_std_ratio: default_noise_std_ratio(),
             noise_seed: default_noise_seed(),
-            gcs_smoothing_window: default_gcs_smoothing_window(),
-            gcs_power_iters: default_gcs_power_iters(),
-            gcs_power_tol: default_gcs_power_tol(),
+            frequency_init: default_frequency_init(),
         }
     }
 }

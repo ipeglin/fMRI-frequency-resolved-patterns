@@ -8,7 +8,7 @@ use rustfft::{FftPlanner, num_complex::Complex};
 use utils::atlas::BrainAtlas;
 use utils::bids_filename::{BidsFilename, filter_directory_bids_files, sort_bids_vec};
 use utils::bids_subject_id::BidsSubjectId;
-use utils::config::AppConfig;
+use utils::config::{AppConfig, FrequencyInitConfig};
 use utils::hdf5_io::{
     H5Attr, ensure_path, open_or_create_group, path_exists, prepare_dataset, write_attrs,
     write_dataset_old,
@@ -321,9 +321,15 @@ fn process_signal_group(
         .collect();
 
     let df = DataFrame::new(columns)?;
+    let freq_init = match cfg.hht.frequency_init {
+        FrequencyInitConfig::Zero => crate::algorithms::mvmd::FrequencyInit::Zero,
+        FrequencyInitConfig::Linear => crate::algorithms::mvmd::FrequencyInit::Linear,
+        FrequencyInitConfig::Exponential => crate::algorithms::mvmd::FrequencyInit::Exponential,
+    };
     let mvmd = MVMD::from_dataframe(&df, alpha, sampling_rate)?
         .with_admm_config(admm_config.clone())
-        .with_variant(mvmd_variant.clone());
+        .with_variant(mvmd_variant.clone())
+        .with_init(freq_init);
 
     let mvmd_start = Instant::now();
     let decomp = mvmd.decompose(num_modes);
@@ -474,9 +480,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             noise_channels: cfg.hht.noise_channels,
             noise_std_ratio: cfg.hht.noise_std_ratio,
             seed: cfg.hht.noise_seed,
-            gcs_smoothing_window: cfg.hht.gcs_smoothing_window,
-            gcs_power_iters: cfg.hht.gcs_power_iters,
-            gcs_power_tol: cfg.hht.gcs_power_tol,
         }
     } else {
         MvmdVariant::Classic
