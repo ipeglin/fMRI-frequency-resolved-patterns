@@ -2,7 +2,6 @@ pub mod baseline;
 pub mod baseline_averaging;
 pub mod baseline_chunked_feature_mean;
 pub mod baseline_img_resize;
-pub mod block_ensemble;
 pub mod face_block_averaging;
 pub mod face_block_averaging_img_resize;
 pub mod face_block_concatenation;
