@@ -162,6 +162,9 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     force: cfg.force,
                     subject_id: formatted_id,
                     task_name,
+                    sampling_rate: cfg.task_sampling_rate,
+                    hht_smoothed: cfg.feature_extraction.hht_smoothed,
+                    hht_ie: cfg.feature_extraction.hht_ie,
                 };
                 strategies::run_for_file(&ctx, &h5_file)
             })();
