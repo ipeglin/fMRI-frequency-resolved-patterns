@@ -883,6 +883,57 @@ mod tests {
     }
 
     #[test]
+    fn test_na_mvmd_modes_do_not_collapse() {
+        // Regression: NA-MVMD must separate two well-spaced tones, not collapse all
+        // modes to the same center frequency (the bug fixed by the raw-GCS ω-update).
+        let num_samples = 512;
+        let sampling_rate = 2000.0_f64;
+        let t: Vec<f64> = (0..num_samples)
+            .map(|i| i as f64 / sampling_rate)
+            .collect();
+
+        // Two channels, each a sum of 50 Hz + 200 Hz tones — normalized: 0.025 and 0.1.
+        let make_channel = |a1: f64, a2: f64| -> Vec<f64> {
+            t.iter()
+                .map(|&ti| {
+                    a1 * (2.0 * PI * 50.0 * ti).sin() + a2 * (2.0 * PI * 200.0 * ti).sin()
+                })
+                .collect()
+        };
+        let data = vec![make_channel(1.0, 0.5), make_channel(0.9, 0.6)];
+
+        let result = MVMD::new(data, sampling_rate)
+            .with_admm_config(ADMMConfig::new(1e-7, 1e-3, 300))
+            .with_init(FrequencyInit::Exponential)
+            .with_variant(MvmdVariant::NoiseAssisted {
+                noise_channels: 1,
+                noise_std_ratio: 0.8,
+                seed: 42,
+            })
+            .decompose(2);
+
+        let freqs = result.center_frequencies.as_slice().unwrap();
+        let (f0, f1) = (freqs[0], freqs[1]);
+        let gap = (f0 - f1).abs();
+
+        assert!(
+            gap > 0.04,
+            "modes collapsed: center frequencies {f0:.4} and {f1:.4} differ by only {gap:.4} \
+             (expected > 0.04; likely all ω pinned to the same mid-band)"
+        );
+
+        // Neither mode should be all-zero.
+        for k in 0..2_usize {
+            let mode_k = result.modes.index_axis(ndarray::Axis(0), k);
+            let max_abs = mode_k.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+            assert!(
+                max_abs > 1e-6,
+                "mode {k} is effectively zero (max |sample| = {max_abs:.2e})"
+            );
+        }
+    }
+
+    #[test]
     fn test_na_mvmd_deterministic() {
         // Same seed → identical output across two runs.
         let num_samples = 64;
