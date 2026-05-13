@@ -31,9 +31,9 @@ pub enum FeatureSource {
     Ts,
     Cwt,
     Hht,
-    HhtRoi,
+    HhtRoiStratified,
     HhtSmoothed,
-    HhtRoiSmoothed,
+    HhtRoiStratifiedSmoothed,
 }
 
 impl FeatureSource {
@@ -42,9 +42,9 @@ impl FeatureSource {
             Self::Ts => "ts",
             Self::Cwt => "cwt",
             Self::Hht => "hht",
-            Self::HhtRoi => "hht_roi",
+            Self::HhtRoiStratified => "hht_roi_stratified",
             Self::HhtSmoothed => "hht_smoothed",
-            Self::HhtRoiSmoothed => "hht_roi_smoothed",
+            Self::HhtRoiStratifiedSmoothed => "hht_roi_stratified_smoothed",
         }
     }
 }
@@ -55,9 +55,9 @@ impl std::str::FromStr for FeatureSource {
         match s {
             "cwt" => Ok(Self::Cwt),
             "hht" => Ok(Self::Hht),
-            "hht_roi" => Ok(Self::HhtRoi),
+            "hht_roi_stratified" => Ok(Self::HhtRoiStratified),
             "hht_smoothed" => Ok(Self::HhtSmoothed),
-            "hht_roi_smoothed" => Ok(Self::HhtRoiSmoothed),
+            "hht_roi_stratified_smoothed" => Ok(Self::HhtRoiStratifiedSmoothed),
             _ => Err(format!("unknown FeatureSource: {}", s)),
         }
     }

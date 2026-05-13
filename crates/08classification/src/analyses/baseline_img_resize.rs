@@ -47,9 +47,9 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         FeatureSource::Ts,
         FeatureSource::Cwt,
         FeatureSource::Hht,
-        FeatureSource::HhtRoi,
+        FeatureSource::HhtRoiStratified,
         FeatureSource::HhtSmoothed,
-        FeatureSource::HhtRoiSmoothed,
+        FeatureSource::HhtRoiStratifiedSmoothed,
     ] {
         let (xs, ys, groups) = build_per_roi_dataset(
             &cfg.consolidated_data_dir,
@@ -84,9 +84,9 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         FeatureSource::Ts,
         FeatureSource::Cwt,
         FeatureSource::Hht,
-        FeatureSource::HhtRoi,
+        FeatureSource::HhtRoiStratified,
         FeatureSource::HhtSmoothed,
-        FeatureSource::HhtRoiSmoothed,
+        FeatureSource::HhtRoiStratifiedSmoothed,
     ] {
         let (xs, ys, groups) = build_mean_dataset(
             &cfg.consolidated_data_dir,
