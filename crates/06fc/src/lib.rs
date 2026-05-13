@@ -430,7 +430,8 @@ fn fc_for_mvmd_subgroup(
     Ok(())
 }
 
-/// Iterate `block_*` MVMD subgroups under `mvmd_root/name` and write per-block FC.
+/// Iterate trial-type → `block_*` MVMD subgroups under `mvmd_root/{name}/{trial_type}`
+/// and write per-block FC.  Mirrors the nested layout written by `04hht`.
 fn fc_for_mvmd_blocks(
     mvmd_root: &hdf5::Group,
     fc_mvmd: &hdf5::Group,
@@ -451,36 +452,45 @@ fn fc_for_mvmd_blocks(
         }
     };
 
-    let block_names: Vec<String> = blocks_src
+    let trial_types: Vec<String> = blocks_src
         .member_names()?
         .into_iter()
-        .filter(|n| n.starts_with("block_"))
+        .filter(|n| !n.starts_with('.'))
         .collect();
 
-    if block_names.is_empty() {
-        debug!(
-            task_name = task_name,
-            group = name,
-            "no mvmd blocks found, skipping FC"
-        );
-        return Ok(());
-    }
-
     let dest_parent = open_or_create_group(fc_mvmd, name, false)?;
-    for block_name in &block_names {
-        fc_for_mvmd_subgroup(
-            &blocks_src,
-            &dest_parent,
-            block_name,
-            task_name,
-            force,
-            roi_fingerprint,
-        )?;
+    let mut total_blocks = 0usize;
+
+    for trial_type in &trial_types {
+        let trial_group = match blocks_src.group(trial_type) {
+            Ok(g) => g,
+            Err(_) => continue,
+        };
+        let block_names: Vec<String> = trial_group
+            .member_names()?
+            .into_iter()
+            .filter(|n| n.starts_with("block_"))
+            .collect();
+        if block_names.is_empty() {
+            continue;
+        }
+        let dest_trial = open_or_create_group(&dest_parent, trial_type, false)?;
+        for block_name in &block_names {
+            fc_for_mvmd_subgroup(
+                &trial_group,
+                &dest_trial,
+                block_name,
+                task_name,
+                force,
+                roi_fingerprint,
+            )?;
+            total_blocks += 1;
+        }
     }
     debug!(
         task_name = task_name,
         group = name,
-        num_blocks = block_names.len(),
+        num_blocks = total_blocks,
         "computed fc/mvmd blocks"
     );
     Ok(())
@@ -536,7 +546,8 @@ fn fc_for_cwt_dataset(
     Ok(())
 }
 
-/// Iterate `block_*` CWT scalogram datasets under `blocks_src` and write per-block FC.
+/// Iterate trial-type → `block_*` CWT scalogram datasets under `blocks_src/{trial_type}`
+/// and write per-block FC.  Mirrors the nested layout written by `03cwt`.
 fn fc_for_cwt_blocks(
     blocks_src: &hdf5::Group,
     fc_cwt: &hdf5::Group,
@@ -544,40 +555,168 @@ fn fc_for_cwt_blocks(
     task_name: &str,
     force: bool,
 ) -> Result<()> {
-    let block_names: Vec<String> = blocks_src
+    let trial_types: Vec<String> = blocks_src
         .member_names()?
         .into_iter()
-        .filter(|n| n.starts_with("block_"))
+        .filter(|n| !n.starts_with('.'))
         .collect();
 
-    if block_names.is_empty() {
-        debug!(
-            task_name = task_name,
-            group = name,
-            "no cwt blocks found, skipping FC"
-        );
-        return Ok(());
-    }
-
     let dest_parent = open_or_create_group(fc_cwt, name, false)?;
-    for block_name in &block_names {
-        match blocks_src.dataset(block_name) {
-            Ok(ds) => fc_for_cwt_dataset(&ds, &dest_parent, block_name, task_name, force)?,
-            Err(_) => {
-                debug!(
-                    task_name = task_name,
-                    group = name,
-                    block = block_name,
-                    "cwt block dataset missing, skipping"
-                );
+    let mut total_blocks = 0usize;
+
+    for trial_type in &trial_types {
+        let trial_group = match blocks_src.group(trial_type) {
+            Ok(g) => g,
+            Err(_) => continue,
+        };
+        let block_names: Vec<String> = trial_group
+            .member_names()?
+            .into_iter()
+            .filter(|n| n.starts_with("block_"))
+            .collect();
+        if block_names.is_empty() {
+            continue;
+        }
+        let dest_trial = open_or_create_group(&dest_parent, trial_type, false)?;
+        for block_name in &block_names {
+            match trial_group.dataset(block_name) {
+                Ok(ds) => {
+                    fc_for_cwt_dataset(&ds, &dest_trial, block_name, task_name, force)?;
+                }
+                Err(_) => {
+                    debug!(
+                        task_name = task_name,
+                        trial_type = trial_type.as_str(),
+                        block = block_name.as_str(),
+                        "cwt block dataset missing, skipping"
+                    );
+                }
             }
+            total_blocks += 1;
         }
     }
     debug!(
         task_name = task_name,
         group = name,
-        num_blocks = block_names.len(),
+        num_blocks = total_blocks,
         "computed fc/cwt blocks"
+    );
+    Ok(())
+}
+
+/// Compute whole-signal Pearson FC on the raw parcellated timeseries from
+/// `/01fmri_parcellation/full_run_std` and write to `/06fc/ts/full_run_std`.
+fn fc_for_ts_full_run(
+    h5_file: &hdf5::File,
+    fc_group: &hdf5::Group,
+    task_name: &str,
+    force: bool,
+) -> Result<()> {
+    let parc = match h5_file.group("01fmri_parcellation") {
+        Ok(g) => g,
+        Err(_) => {
+            debug!(task_name, "no 01fmri_parcellation group, skipping TS FC");
+            return Ok(());
+        }
+    };
+    let fc_ts = open_or_create_group(fc_group, "ts", false)?;
+    if !force && subgroup_complete(&fc_ts, "full_run_std", "n_channels") {
+        debug!(task_name, "fc/ts full_run_std already computed, skipping");
+        return Ok(());
+    }
+    let ds = match parc.dataset("full_run_std") {
+        Ok(d) => d,
+        Err(_) => {
+            debug!(task_name, "full_run_std missing in 01fmri_parcellation");
+            return Ok(());
+        }
+    };
+    let data_f32: ndarray::Array2<f32> = ds.read_2d()?;
+    let data: Array2<f64> = data_f32.mapv(|v| v as f64);
+    let pearson = pearson_matrix(&data);
+    let dest = open_or_create_group(&fc_ts, "full_run_std", force)?;
+    write_fc_pair(
+        &dest,
+        &pearson,
+        &[
+            H5Attr::u32("n_channels", data.nrows() as u32),
+            H5Attr::u32("n_timepoints", data.ncols() as u32),
+        ],
+    )?;
+    debug!(task_name, n_channels = data.nrows(), "computed fc/ts full_run_std");
+    Ok(())
+}
+
+/// Compute whole-signal Pearson FC for each trial block from
+/// `/02fmri_segment_trials/blocks_std/{trial_type}/block_*` and write to
+/// `/06fc/ts/blocks_std/{trial_type}/block_*`.
+fn fc_for_ts_blocks(
+    h5_file: &hdf5::File,
+    fc_group: &hdf5::Group,
+    task_name: &str,
+    force: bool,
+) -> Result<()> {
+    let seg_blocks = match h5_file.group("02fmri_segment_trials/blocks_std") {
+        Ok(g) => g,
+        Err(_) => {
+            debug!(
+                task_name,
+                "no 02fmri_segment_trials/blocks_std, skipping TS FC blocks"
+            );
+            return Ok(());
+        }
+    };
+    let fc_ts = open_or_create_group(fc_group, "ts", false)?;
+    let dest_root = open_or_create_group(&fc_ts, "blocks_std", false)?;
+
+    let trial_types: Vec<String> = seg_blocks
+        .member_names()?
+        .into_iter()
+        .filter(|n| !n.starts_with('.'))
+        .collect();
+
+    let mut total_blocks = 0usize;
+    for trial_type in &trial_types {
+        let trial_group = match seg_blocks.group(trial_type) {
+            Ok(g) => g,
+            Err(_) => continue,
+        };
+        let block_names: Vec<String> = trial_group
+            .member_names()?
+            .into_iter()
+            .filter(|n| n.starts_with("block_"))
+            .collect();
+        if block_names.is_empty() {
+            continue;
+        }
+        let dest_trial = open_or_create_group(&dest_root, trial_type, false)?;
+        for block_name in &block_names {
+            if !force && subgroup_complete(&dest_trial, block_name, "n_channels") {
+                continue;
+            }
+            let ds = match trial_group.dataset(block_name) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let data_f32: ndarray::Array2<f32> = ds.read_2d()?;
+            let data: Array2<f64> = data_f32.mapv(|v| v as f64);
+            let pearson = pearson_matrix(&data);
+            let dest = open_or_create_group(&dest_trial, block_name, force)?;
+            write_fc_pair(
+                &dest,
+                &pearson,
+                &[
+                    H5Attr::u32("n_channels", data.nrows() as u32),
+                    H5Attr::u32("n_timepoints", data.ncols() as u32),
+                ],
+            )?;
+            total_blocks += 1;
+        }
+    }
+    debug!(
+        task_name,
+        num_blocks = total_blocks,
+        "computed fc/ts blocks"
     );
     Ok(())
 }
@@ -650,7 +789,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
 
                 match task_name {
                     "restAP" => {
-                        // CWT full-run scalogram on all channels
+                        fc_for_ts_full_run(&h5_file, &fc_group, task_name, cfg.force)?;
                         if let Ok(cwt_root) = h5_file.group("03cwt")
                             && let Ok(ds) = cwt_root.dataset("full_run_std")
                         {
@@ -663,12 +802,12 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                                 cfg.force,
                             )?;
                         }
-                        if let Ok(mvmd_root) = h5_file.group("04mvmd") {
+                        if let Ok(mvmd_root) = h5_file.group("04hht") {
                             let fc_mvmd = open_or_create_group(&fc_group, "mvmd", false)?;
                             fc_for_mvmd_subgroup(
                                 &mvmd_root,
                                 &fc_mvmd,
-                                "full_run_raw",
+                                "full_run_std",
                                 task_name,
                                 cfg.force,
                                 None,
@@ -678,7 +817,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                                 fc_for_mvmd_subgroup(
                                     &mvmd_root,
                                     &fc_mvmd,
-                                    "full_run_raw_roi",
+                                    "full_run_std_roi",
                                     task_name,
                                     cfg.force,
                                     Some(&fp),
@@ -687,7 +826,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                         }
                     }
                     "hammerAP" => {
-                        // CWT block scalograms on all channels
+                        fc_for_ts_blocks(&h5_file, &fc_group, task_name, cfg.force)?;
                         if let Ok(cwt_root) = h5_file.group("03cwt")
                             && let Ok(blocks_std) = cwt_root.group("blocks_std")
                         {
@@ -700,12 +839,12 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                                 cfg.force,
                             )?;
                         }
-                        if let Ok(mvmd_root) = h5_file.group("04mvmd") {
+                        if let Ok(mvmd_root) = h5_file.group("04hht") {
                             let fc_mvmd = open_or_create_group(&fc_group, "mvmd", false)?;
                             fc_for_mvmd_blocks(
                                 &mvmd_root,
                                 &fc_mvmd,
-                                "blocks_raw",
+                                "blocks_std",
                                 task_name,
                                 cfg.force,
                                 None,
@@ -715,7 +854,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                                 fc_for_mvmd_blocks(
                                     &mvmd_root,
                                     &fc_mvmd,
-                                    "blocks_raw_roi",
+                                    "blocks_std_roi",
                                     task_name,
                                     cfg.force,
                                     Some(&fp),
