@@ -11,6 +11,7 @@ members = [
   "crates/06fc",
   "crates/07feature_extraction",
   "crates/08classification",
+  "crates/09fc_analysis",
 ]
 
 [workspace.dependencies]

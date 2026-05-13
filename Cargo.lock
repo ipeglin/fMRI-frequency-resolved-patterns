@@ -519,6 +519,7 @@ dependencies = [
  "classification",
  "cwt",
  "fc",
+ "fc_analysis",
  "feature_extraction",
  "fmri_parcellation",
  "fmri_segment_trials",
@@ -880,6 +881,20 @@ dependencies = [
  "anyhow",
  "hdf5",
  "ndarray 0.15.6",
+ "tracing",
+ "utils",
+]
+
+[[package]]
+name = "fc_analysis"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hdf5",
+ "ndarray 0.15.6",
+ "rand 0.8.5",
+ "rand_chacha 0.3.1",
+ "rayon",
  "tracing",
  "utils",
 ]
