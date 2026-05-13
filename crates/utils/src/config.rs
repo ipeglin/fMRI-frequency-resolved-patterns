@@ -53,6 +53,8 @@ pub struct AppConfig {
     pub feature_extraction: FeatureExtractionParams,
     #[serde(default)]
     pub classification: ClassificationParams,
+    #[serde(default)]
+    pub fc_analysis: FcAnalysisParams,
 
     /// Single source of truth for which atlas rows the spec-dependent stages
     /// (04mvmd `_roi`, 05hilbert `_roi`, 06fc `_roi`, 07feature_extraction)
@@ -110,6 +112,7 @@ impl Default for AppConfig {
             hht: HhtParams::default(),
             feature_extraction: FeatureExtractionParams::default(),
             classification: ClassificationParams::default(),
+            fc_analysis: FcAnalysisParams::default(),
             roi_selection: RoiSelectionSpec::default(),
         }
     }
@@ -423,6 +426,40 @@ impl Default for ClassificationParams {
         Self {
             knn_num_neighbors: 3,
             knn_metric: default_knn_metric(),
+        }
+    }
+}
+
+/// Parameters for the supplementary FC group-difference analysis (stage 09).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FcAnalysisParams {
+    /// Number of label permutations for NBS / FWER / FDR null distributions.
+    #[serde(default = "default_fc_n_permutations")]
+    pub n_permutations: u32,
+    /// Primary t-statistic threshold for NBS suprathreshold graph (≈ p<0.001 one-tail).
+    #[serde(default = "default_fc_nbs_primary_t")]
+    pub nbs_primary_t: f64,
+    /// Seed for ChaCha20 RNG — ensures reproducible permutation results.
+    #[serde(default = "default_fc_permutation_seed")]
+    pub permutation_seed: u64,
+}
+
+fn default_fc_n_permutations() -> u32 {
+    10_000
+}
+fn default_fc_nbs_primary_t() -> f64 {
+    3.1
+}
+fn default_fc_permutation_seed() -> u64 {
+    0x00C0_FFEE_C0FF_EE00
+}
+
+impl Default for FcAnalysisParams {
+    fn default() -> Self {
+        Self {
+            n_permutations: default_fc_n_permutations(),
+            nbs_primary_t: default_fc_nbs_primary_t(),
+            permutation_seed: default_fc_permutation_seed(),
         }
     }
 }
