@@ -120,18 +120,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
 
     let demos_path = demos_path.to_str().expect("File path could not be parsed"); // shadowing
 
-    // Available demographics
-    // let demos_df = LazyCsvReader::new(PlPath::from_str(demos_path))
-    //     .with_separator(b',')
-    //     .with_has_header(true)
-    //     .with_skip_rows(1) // Skip the garbage first row, treat row 2 as headers
-    //     .with_ignore_errors(true)
-    //     .with_encoding(CsvEncoding::LossyUtf8)
-    //     .finish()?
-    //     .unique(Some(cols(["subjectkey"])), UniqueKeepStrategy::Any) // Get unique entries
-    //     .select([col("subjectkey")])
-    //     .collect()?;
-
     // General population
     let genpop_df = LazyCsvReader::new(PlPath::from_str(demos_path))
         .with_separator(b',')
@@ -144,32 +132,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         .unique(Some(cols(["subjectkey"])), UniqueKeepStrategy::Any) // Get unique entries
         .select([col("subjectkey")])
         .collect()?;
-
-    // Major Depressive Disorder (Primary Diagnosis)
-    // let primary_mdd_df = LazyCsvReader::new(PlPath::from_str(demos_path))
-    //     .with_separator(b',')
-    //     .with_has_header(true)
-    //     .with_skip_rows(1) // Skip the garbage first row, treat row 2 as headers
-    //     .with_ignore_errors(true)
-    //     .with_encoding(CsvEncoding::LossyUtf8)
-    //     .finish()?
-    //     .filter(col("Primary_Dx").str().contains(lit("MDD"), false))
-    //     .unique(Some(cols(["subjectkey"])), UniqueKeepStrategy::Any) // Get unique entries
-    //     .select([col("subjectkey")])
-    //     .collect()?;
-
-    // // Major Depressive Disorder (Primary Diagnosis)
-    // let secondary_mdd_df = LazyCsvReader::new(PlPath::from_str(demos_path))
-    //     .with_separator(b',')
-    //     .with_has_header(true)
-    //     .with_skip_rows(1) // Skip the garbage first row, treat row 2 as headers
-    //     .with_ignore_errors(true)
-    //     .with_encoding(CsvEncoding::LossyUtf8)
-    //     .finish()?
-    //     .filter(col("Non-Primary_Dx").str().contains(lit("MDD"), false))
-    //     .unique(Some(cols(["subjectkey"])), UniqueKeepStrategy::Any) // Get unique entries
-    //     .select([col("subjectkey")])
-    //     .collect()?;
 
     /////////////////////////
     // Apply SHAPS Filters //
@@ -225,13 +187,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         .unique(Some(cols(["subjectkey"])), UniqueKeepStrategy::Any)
         .select([col("subjectkey"), col("shaps_computed_total")])
         .collect()?;
-
-    // Available SHAPS subjects
-    // let shaps_df = shaps_valid_df
-    //     .clone()
-    //     .lazy()
-    //     .select([col("subjectkey")])
-    //     .collect()?;
 
     // Anhedonic subjects: computed scores are 3–14
     let shaps_anhedonic_df = shaps_valid_df
@@ -292,13 +247,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         .unique(Some(cols(["subjectkey"])), UniqueKeepStrategy::Any)
         .select(select_exprs)
         .collect()?;
-
-    // Available TEPS subjects
-    // let teps_df = teps_valid_df
-    //     .clone()
-    //     .lazy()
-    //     .select([col("subjectkey")])
-    //     .collect()?;
 
     // Compute per-participant mean for anticipatory and consummatory scores.
     // Manually compute mean: sum valid scores and divide by count of non-null values
