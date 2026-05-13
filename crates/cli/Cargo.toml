@@ -30,3 +30,4 @@ hht = { path = "../04hht" }
 fc = { path = "../06fc" }
 feature_extraction = { path = "../07feature_extraction", optional = true }
 classification = { path = "../08classification" }
+fc_analysis = { path = "../09fc_analysis" }

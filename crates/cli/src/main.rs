@@ -117,6 +117,13 @@ enum Command {
         #[arg(long, short = 'f')]
         force: bool,
     },
+    FcAnalysis {
+        #[arg(long)]
+        consolidated_data_dir: Option<PathBuf>,
+
+        #[arg(long, short = 'f')]
+        force: bool,
+    },
     #[cfg(feature = "feature-extraction")]
     FeatureExtraction {
         #[arg(long)]
@@ -318,6 +325,19 @@ fn main() -> Result<()> {
             }
 
             fc::run(&cfg)
+        }
+        Command::FcAnalysis {
+            consolidated_data_dir,
+            force,
+        } => {
+            if let Some(v) = consolidated_data_dir {
+                cfg.consolidated_data_dir = v;
+            }
+            if force {
+                cfg.force = true;
+            }
+
+            fc_analysis::run(&cfg)
         }
         #[cfg(feature = "feature-extraction")]
         Command::FeatureExtraction {

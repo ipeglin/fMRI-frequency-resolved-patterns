@@ -83,5 +83,6 @@ run_stage "04" "hht"
 run_stage "06" "fc"
 run_stage "07" "feature-extraction"
 run_stage "08" "classify"
+run_stage "09" "fc-analysis"
 
 log_title "Pipeline Execution Finished Successfully"
