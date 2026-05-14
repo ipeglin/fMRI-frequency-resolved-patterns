@@ -17,7 +17,7 @@ sed -i.bak \
     -e "s|^tcp_repo_dir = .*|tcp_repo_dir = \"/cluster/work/$USER/ds005237\"|" \
     -e "s|^fmriprep_output_dir = .*|fmriprep_output_dir = \"/cluster/projects/itea_lille-ie/Transdiagnostic/output/fmriprep-25.1.4\"|" \
     -e "s|^consolidated_data_dir = .*|consolidated_data_dir = \"/cluster/work/$USER/bids_processed_consolidated_data\"|" \
-    -e "s|^subject_filter_dir = .*|subject_filter_dir = \"/cluster/work/$USER/subject_filters_legacy\"|" \
+    -e "s|^subject_filter_dir = .*|subject_filter_dir = \"/cluster/work/$USER/cohorts\"|" \
     -e "s|^classification_results_dir = .*|classification_results_dir = \"/cluster/work/$USER/classifier_results\"|" \
     "$CONFIG_FILE"
 
