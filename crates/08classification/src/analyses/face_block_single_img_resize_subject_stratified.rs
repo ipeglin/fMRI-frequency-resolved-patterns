@@ -12,7 +12,7 @@ use utils::config::AppConfig;
 
 use crate::classifiers::DistanceMetric;
 use crate::dataset::{
-    AnalysisKind, FeatureSource, build_mean_dataset, build_per_roi_dataset, load_labels,
+    AnalysisKind, FeatureSource, build_per_roi_dataset, load_labels,
 };
 use crate::eval::eval_knn_three_way_split_subject_aware;
 
@@ -67,36 +67,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             cfg.classification.knn_num_neighbors,
             metric,
             "task_per_block_resized",
-            source,
-            &results_dir,
-        )?;
-    }
-
-    for source in [
-        FeatureSource::Cwt,
-        FeatureSource::Hht,
-        FeatureSource::HhtRoiStratified,
-        FeatureSource::HhtSmoothed,
-        FeatureSource::HhtRoiStratifiedSmoothed,
-    ] {
-        let (xs, ys, groups) = build_mean_dataset(
-            &cfg.consolidated_data_dir,
-            &subject_ids,
-            &labels,
-            source,
-            AnalysisKind::TaskPerBlockResized,
-        )?;
-        if xs.is_empty() {
-            debug!(source = ?source, "no samples, skipping");
-            continue;
-        }
-        eval_knn_three_way_split_subject_aware(
-            xs,
-            ys,
-            &groups,
-            cfg.classification.knn_num_neighbors,
-            metric,
-            "task_per_block_resized_mean",
             source,
             &results_dir,
         )?;
