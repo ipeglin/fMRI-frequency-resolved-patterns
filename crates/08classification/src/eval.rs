@@ -38,7 +38,7 @@ use crate::metrics::{
     expected_calibration_error, log_loss, threshold_sweep, youden_optimal_threshold,
 };
 use crate::normalizer::ZScoreNormalizer;
-use crate::splits::{split_rows_stratified_new, split_subjects_stratified};
+use crate::splits::{balance_train_indices, split_rows_stratified_new, split_subjects_stratified};
 
 const SEED: u64 = 42;
 const SWEEP_THRESHOLDS: &[f32] = &[0.3, 0.4, 0.5, 0.6, 0.7];
@@ -413,8 +413,8 @@ fn run_knn_pipeline(
         holdout_acc_youden = format!("{:.2}%", holdout_split.at_youden.accuracy * 100.0),
         holdout_brier_cal = format!("{:.4}", holdout_split.calibrated.brier),
         holdout_logloss_cal = format!("{:.4}", holdout_split.calibrated.log_loss),
-        holdout_auc_roc_cal = format!("{:.4}", holdout_split.calibrated.auc_roc),
         holdout_auc_pr_cal = format!("{:.4}", holdout_split.calibrated.auc_pr),
+        holdout_auc_roc_cal = format!("{:.4}", holdout_split.calibrated.auc_roc),
         holdout_ece_cal = format!("{:.4}", holdout_split.calibrated.expected_calibration_error),
         holdout_youden_t = format!("{:.3}", holdout_split.at_youden.threshold),
         holdout_cm_youden = ?holdout_split.at_youden.confusion_matrix,
@@ -519,6 +519,7 @@ pub fn eval_knn_three_way_split(
     results_dir: &Path,
 ) -> Result<()> {
     let (train_idx, calibration_idx, holdout_idx) = split_rows_stratified_new(&ys, SEED);
+    let train_idx = balance_train_indices(&train_idx, &ys, SEED);
     run_knn_pipeline(
         train_idx,
         calibration_idx,
@@ -596,6 +597,8 @@ pub fn eval_knn_three_way_split_subject_aware(
             source
         );
     }
+
+    let train_idx = balance_train_indices(&train_idx, &ys, SEED);
 
     run_knn_pipeline(
         train_idx,

@@ -2,7 +2,6 @@ use crate::dataset::Label as DatasetLabel;
 use anyhow::{Context, Result};
 use polars::prelude::*;
 use rand::SeedableRng;
-use rand::seq::IteratorRandom;
 use rand::seq::SliceRandom;
 use rand_chacha::ChaCha8Rng;
 use std::collections::HashMap;
@@ -36,7 +35,10 @@ fn write_subject_set<P: AsRef<Path>>(path: P, subjects: &[String]) -> Result<()>
     Ok(())
 }
 
-/// Subject-level split, with balance-truncation. Returns (train, test, val).
+/// Subject-level stratified split. Each class is split independently 70/15/15
+/// so the natural class ratio is preserved in every set. Training-set class
+/// balance is handled separately in `balance_train_indices`.
+/// Returns (train, test, val).
 pub fn split_subjects_stratified(
     controls: &[String],
     anhedonic: &[String],
@@ -44,32 +46,60 @@ pub fn split_subjects_stratified(
 ) -> (Vec<String>, Vec<String>, Vec<String>) {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
 
-    let balanced_group_size = controls.len().min(anhedonic.len());
+    let mut controls = controls.to_vec();
+    let mut anhedonic = anhedonic.to_vec();
+    controls.shuffle(&mut rng);
+    anhedonic.shuffle(&mut rng);
 
-    let selected_controls: Vec<_> = controls
-        .iter()
-        .choose_multiple(&mut rng, balanced_group_size);
-    let selected_anhedonic: Vec<_> = anhedonic
-        .iter()
-        .choose_multiple(&mut rng, balanced_group_size);
+    let (c_train, c_test, c_val) = stratified_subject_split(&controls);
+    let (a_train, a_test, a_val) = stratified_subject_split(&anhedonic);
 
-    let mut selected_subjects: Vec<String> = selected_controls
-        .into_iter()
-        .chain(selected_anhedonic)
-        .cloned()
+    let train = [c_train, a_train].concat();
+    let test = [c_test, a_test].concat();
+    let val = [c_val, a_val].concat();
+    (train, test, val)
+}
+
+fn stratified_subject_split(group: &[String]) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let n_train = (group.len() as f64 * 0.7).round() as usize;
+    let n_val = (group.len() as f64 * 0.15).round() as usize;
+    (
+        group[..n_train].to_vec(),
+        group[n_train + n_val..].to_vec(),
+        group[n_train..n_train + n_val].to_vec(),
+    )
+}
+
+/// Undersample the majority class within `train_idx` so both classes are equal.
+/// Calibration and holdout sets are left untouched — they retain the natural
+/// class ratio so evaluation reflects deployment conditions.
+pub fn balance_train_indices(
+    train_idx: &[usize],
+    ys: &[DatasetLabel],
+    seed: u64,
+) -> Vec<usize> {
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+
+    let mut class0: Vec<usize> = train_idx
+        .iter()
+        .copied()
+        .filter(|&i| ys[i] == DatasetLabel::Control)
         .collect();
-    selected_subjects.shuffle(&mut rng);
+    let mut class1: Vec<usize> = train_idx
+        .iter()
+        .copied()
+        .filter(|&i| ys[i] == DatasetLabel::Anhedonic)
+        .collect();
 
-    let total = selected_subjects.len();
-    let n_train = (total as f64 * 0.7).round() as usize;
-    let n_val = (total as f64 * 0.15).round() as usize;
+    let n = class0.len().min(class1.len());
+    class0.shuffle(&mut rng);
+    class1.shuffle(&mut rng);
+    class0.truncate(n);
+    class1.truncate(n);
 
-    let mut it = selected_subjects.into_iter();
-    let train_set: Vec<String> = it.by_ref().take(n_train).collect();
-    let val_set: Vec<String> = it.by_ref().take(n_val).collect();
-    let test_set: Vec<String> = it.collect();
-
-    (train_set, test_set, val_set)
+    let mut balanced: Vec<usize> = class0.into_iter().chain(class1).collect();
+    balanced.shuffle(&mut rng);
+    balanced
 }
 
 /// Row-level, label-stratified split. Returns indices for (train, test, val).
