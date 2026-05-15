@@ -44,13 +44,13 @@ if [ -n "$LIBTORCH" ]; then
 fi
 
 # --- Build Project ---
-log_step "Building the project (cargo build --release --all-features)"
+log_step "Checking build the project (cargo check --release --all-features)"
 cd "$PROJECT_ROOT"
-if ! cargo build --release --all-features; then
-    log_err "Failed to build the project. Aborting pipeline."
+if ! cargo check --release --all-features; then
+    log_err "Failed check of the project. Aborting pipeline."
     exit 1
 fi
-log_success "Build complete."
+log_success "Check complete."
 
 # --- Pipeline Execution ---
 # Using cargo run handles the dynamic library paths (DYLD_LIBRARY_PATH/LD_LIBRARY_PATH)
