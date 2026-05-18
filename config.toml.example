@@ -64,22 +64,22 @@ knn_num_neighbors = 11
 knn_metric = "cosine" # cosine | euclidean | mahalanobis | mahalanobis_diag
 
 # Single source of truth for which atlas rows the spec-dependent stages
-# (04hht `_roi`, 06fc `_roi`, 07feature_extraction)
-# operate on. Cortical regions match exactly against the Yeo region label
-# (e.g. "PFCm"). Cortical networks match exactly against the Yeo network
-# label (e.g. "LimbicA", "LimbicB", "DefaultA"); when both `cortical_regions`
-# and `cortical_networks` are set, the intersection is selected. An empty
-# list on either axis means "no constraint on that axis" — leaving
-# `cortical_networks` empty includes all networks for the listed regions,
-# while leaving `cortical_regions` empty includes all regions in the listed
-# networks. Subcortical regions match by substring against the Tian region
-# label (e.g. "AMY" catches both "lAMY" and "mAMY").
+# (07feature_extraction, 09fc_analysis) operate on.
 #
-# Example: limit to limbic cortical PFC + AMY subcortical:
-#   cortical_regions = ["PFCv", "PFCm"]
-#   cortical_networks = ["LimbicA", "LimbicB"]
-#   subcortical_regions = ["AMY"]
-[roi_selection]
+# Cortical regions match exactly against the Yeo region label (e.g. "PFCm").
+# Cortical networks match exactly against the Yeo network label (e.g. "LimbicA");
+# when both are set the intersection is selected. Subcortical regions match by
+# substring against the Tian region label (e.g. "AMY" catches "lAMY"/"mAMY").
+#
+# Each entry can optionally pin a hemisphere:
+#   cortical_regions = ["PFCv", { region = "PFCm", hemisphere = "LH" }]
+# Bare strings select both hemispheres. hemisphere = "LH" | "RH".
+#
+# stratified_decomposition (default false): when true, stage 04 runs a separate
+# MVMD pass on the ROI-subset rows and writes `_roi` HDF5 groups. When false
+# (default), only the full-signal multi-channel decomp is run and ROIs are
+# extracted post-hoc from the derived modes - cheaper and consistent with the
+# full-channel MVMD decomposition.[roi_selection]
 name = "vpfc_mpfc_amy"
 cortical_regions = ["PFCv", "PFCm"]
 cortical_networks = []
