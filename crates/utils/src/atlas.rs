@@ -649,10 +649,10 @@ mod tests {
             stratified_decomposition: false,
         };
         let sel = atlas.selected_rois(&spec);
-        // PFCv: both hemis (2); PFCm LH only (2 networks in fixture)
+        // PFCv: both hemis (3: LH LimbicB, RH LimbicB, LH DefaultB); PFCm LH only (2 networks in fixture)
         let pfcv: Vec<_> = sel.iter().filter(|r| r.matched_region == "PFCv").collect();
         let pfcm: Vec<_> = sel.iter().filter(|r| r.matched_region == "PFCm").collect();
-        assert_eq!(pfcv.len(), 2);
+        assert_eq!(pfcv.len(), 3);
         assert!(pfcm.iter().all(|r| r.hemisphere == Hemisphere::Left));
     }
 
@@ -731,5 +731,21 @@ mod tests {
         assert!(spec.is_empty());
         spec.cortical_networks = vec!["LimbicA".into()];
         assert!(!spec.is_empty());
+    }
+
+    #[test]
+    fn roi_selection_spec_deser_bare_strings() {
+        let toml_str = r#"
+name = "vpfc_mpfc_amy"
+stratified_decomposition = false
+cortical_regions = ["PFCv", "PFCm"]
+cortical_networks = []
+subcortical_regions = ["AMY"]
+"#;
+        let spec: RoiSelectionSpec = toml::from_str(toml_str).unwrap();
+        assert!(!spec.is_empty());
+        assert_eq!(spec.cortical_regions.len(), 2);
+        assert_eq!(spec.subcortical_regions.len(), 1);
+        assert!(matches!(spec.cortical_regions[0], RoiSpec::Bare(_)));
     }
 }
