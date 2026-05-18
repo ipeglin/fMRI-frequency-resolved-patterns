@@ -12,7 +12,7 @@ use utils::config::AppConfig;
 
 use crate::classifiers::DistanceMetric;
 use crate::dataset::{
-    AnalysisKind, FeatureSource, build_per_roi_dataset, load_labels,
+    AnalysisKind, build_per_roi_dataset, load_labels, enabled_rest_sources
 };
 use crate::eval::eval_knn_three_way_split_subject_aware;
 
@@ -42,14 +42,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
 
     let results_dir = cfg.resolved_classification_results_dir().join("subject_stratified");
 
-    for source in [
-        FeatureSource::Ts,
-        FeatureSource::Cwt,
-        FeatureSource::Hht,
-        FeatureSource::HhtRoiStratified,
-        FeatureSource::HhtSmoothed,
-        FeatureSource::HhtRoiStratifiedSmoothed,
-    ] {
+    for source in enabled_rest_sources(cfg) {
         let (xs, ys, groups) = build_per_roi_dataset(
             &cfg.consolidated_data_dir,
             &subject_ids,

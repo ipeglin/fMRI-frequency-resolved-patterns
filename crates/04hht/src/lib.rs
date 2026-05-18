@@ -516,7 +516,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     let brain_atlas =
         BrainAtlas::from_lut_files(&cfg.cortical_atlas_lut, &cfg.subcortical_atlas_lut);
     let spec = &cfg.roi_selection;
-    let roi_subset_enabled = !spec.is_empty();
+    let roi_subset_enabled = spec.stratified_decomposition && !spec.is_empty();
     let selected = brain_atlas.selected_rois(spec);
     let roi_row_indices: Vec<usize> = selected.iter().map(|r| r.row_index).collect();
     let roi_indices_u32: Vec<u32> = roi_row_indices.iter().map(|i| *i as u32).collect();

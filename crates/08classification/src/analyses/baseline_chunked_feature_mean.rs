@@ -12,7 +12,8 @@ use utils::bids_subject_id::BidsSubjectId;
 use utils::config::AppConfig;
 
 use crate::classifiers::DistanceMetric;
-use crate::dataset::{AnalysisKind, FeatureSource, build_per_roi_dataset, load_labels};
+use crate::dataset::{AnalysisKind, build_per_roi_dataset, load_labels, enabled_rest_sources
+};
 use crate::eval::eval_knn_three_way_split;
 
 pub fn run(cfg: &AppConfig) -> Result<()> {
@@ -39,14 +40,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         .collect();
     labels.retain(|k, _| subject_ids.contains(k));
 
-    for source in [
-        FeatureSource::Ts,
-        FeatureSource::Cwt,
-        FeatureSource::Hht,
-        FeatureSource::HhtRoiStratified,
-        FeatureSource::HhtSmoothed,
-        FeatureSource::HhtRoiStratifiedSmoothed,
-    ] {
+    for source in enabled_rest_sources(cfg) {
         let (xs, ys, groups) = build_per_roi_dataset(
             &cfg.consolidated_data_dir,
             &subject_ids,

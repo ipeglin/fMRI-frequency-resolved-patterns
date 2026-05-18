@@ -3,6 +3,7 @@ use ndarray::{Array3, Axis};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
+use utils::atlas::BrainAtlas;
 use utils::bids_subject_id::BidsSubjectId;
 use utils::config::AppConfig;
 use utils::frequency_bands::SLOW_BANDS;
@@ -283,15 +284,31 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     // ROI variants (if configured)
     // ------------------------------------------------------------------
     if run_roi {
-        // Resolve ROI indices from first available subject.
-        let roi_indices: Option<Vec<usize>> = subjects.iter().find_map(|(_, h5_path)| {
-            hdf5::File::open(h5_path).ok().and_then(|f| read_roi_indices(&f))
-        });
-        let Some(roi_idx) = roi_indices else {
-            warn!("roi_selection configured but no roi_indices found in any subject H5; skipping ROI analyses");
-            return Ok(());
+        // Resolve ROI indices. When stratified_decomposition is enabled the
+        // indices were stored in the `_roi` HDF5 groups by stage 04/06. When
+        // it is disabled (default) we derive them directly from the atlas so
+        // that ROI-submatrix analyses still work without the extra decomp pass.
+        let roi_idx: std::sync::Arc<Vec<usize>> = if cfg.roi_selection.stratified_decomposition {
+            let from_disk: Option<Vec<usize>> = subjects.iter().find_map(|(_, h5_path)| {
+                hdf5::File::open(h5_path).ok().and_then(|f| read_roi_indices(&f))
+            });
+            let Some(idx) = from_disk else {
+                warn!("stratified_decomposition=true but no roi_indices found in any subject H5; skipping ROI analyses");
+                return Ok(());
+            };
+            std::sync::Arc::new(idx)
+        } else {
+            let brain_atlas = BrainAtlas::from_lut_files(
+                &cfg.cortical_atlas_lut,
+                &cfg.subcortical_atlas_lut,
+            );
+            let selected = brain_atlas.selected_rois(&cfg.roi_selection);
+            if selected.is_empty() {
+                warn!("roi_selection matched zero atlas rows; skipping ROI analyses");
+                return Ok(());
+            }
+            std::sync::Arc::new(selected.iter().map(|r| r.row_index).collect())
         };
-        let roi_idx = std::sync::Arc::new(roi_idx);
 
         // restAP TS ROI — submatrix extraction (no _roi group for TS).
         {
@@ -302,29 +319,49 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             })?;
         }
 
-        // restAP CWT ROI
+        // restAP CWT ROI — submatrix from full CWT FC (no _roi group for CWT).
         for &(band, _, _) in SLOW_BANDS {
-            let group = format!("/06fc/cwt/full_run_std_roi/{band}");
+            let group = format!("/06fc/cwt/full_run_std/{band}");
+            let idx = std::sync::Arc::clone(&roi_idx);
             run_one(&subjects, &labels, &results_dir, "restAP", "cwt", band, "_roi", n_perm, primary_t, seed, move |f| {
-                read_fc_matrix(f, &group, None, "fisher_z")
+                let full = read_fc_matrix(f, &group, None, "fisher_z")?;
+                Ok(full.map(|m| extract_roi_submatrix(&m, &idx)))
             })?;
         }
 
         // restAP MVMD mode ROI
         for k in 0..num_modes {
-            let group = format!("/06fc/mvmd/full_run_std_roi/mode_{k}");
             let level = format!("mode_{k}");
-            run_one(&subjects, &labels, &results_dir, "restAP", "mvmd", &level, "_roi", n_perm, primary_t, seed, move |f| {
-                read_fc_matrix(f, &group, None, "fisher_z")
-            })?;
+            let idx = std::sync::Arc::clone(&roi_idx);
+            if cfg.roi_selection.stratified_decomposition {
+                let group = format!("/06fc/mvmd/full_run_std_roi/mode_{k}");
+                run_one(&subjects, &labels, &results_dir, "restAP", "mvmd", &level, "_roi", n_perm, primary_t, seed, move |f| {
+                    read_fc_matrix(f, &group, None, "fisher_z")
+                })?;
+            } else {
+                let group = format!("/06fc/mvmd/full_run_std/mode_{k}");
+                run_one(&subjects, &labels, &results_dir, "restAP", "mvmd", &level, "_roi", n_perm, primary_t, seed, move |f| {
+                    let full = read_fc_matrix(f, &group, None, "fisher_z")?;
+                    Ok(full.map(|m| extract_roi_submatrix(&m, &idx)))
+                })?;
+            }
         }
 
         // restAP MVMD band ROI
         for &(band, _, _) in SLOW_BANDS {
-            let group = format!("/06fc/mvmd/full_run_std_roi/{band}");
-            run_one(&subjects, &labels, &results_dir, "restAP", "mvmd", band, "_roi", n_perm, primary_t, seed, move |f| {
-                read_fc_matrix(f, &group, None, "fisher_z_mean")
-            })?;
+            let idx = std::sync::Arc::clone(&roi_idx);
+            if cfg.roi_selection.stratified_decomposition {
+                let group = format!("/06fc/mvmd/full_run_std_roi/{band}");
+                run_one(&subjects, &labels, &results_dir, "restAP", "mvmd", band, "_roi", n_perm, primary_t, seed, move |f| {
+                    read_fc_matrix(f, &group, None, "fisher_z_mean")
+                })?;
+            } else {
+                let group = format!("/06fc/mvmd/full_run_std/{band}");
+                run_one(&subjects, &labels, &results_dir, "restAP", "mvmd", band, "_roi", n_perm, primary_t, seed, move |f| {
+                    let full = read_fc_matrix(f, &group, None, "fisher_z_mean")?;
+                    Ok(full.map(|m| extract_roi_submatrix(&m, &idx)))
+                })?;
+            }
         }
 
         // hammerAP TS ROI — submatrix extraction.
@@ -336,11 +373,13 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             })?;
         }
 
-        // hammerAP CWT band ROI
+        // hammerAP CWT band ROI — submatrix from full CWT FC.
         for &(band, _, _) in SLOW_BANDS {
             let level = format!("face_block_avg_{band}");
+            let idx = std::sync::Arc::clone(&roi_idx);
             run_one(&subjects, &labels, &results_dir, "hammerAP", "cwt", &level, "_roi", n_perm, primary_t, seed, move |f| {
-                aggregate_face_blocks(f, "/06fc/cwt/blocks_std_roi", Some(band), "fisher_z")
+                let full = aggregate_face_blocks(f, "/06fc/cwt/blocks_std", Some(band), "fisher_z")?;
+                Ok(full.map(|m| extract_roi_submatrix(&m, &idx)))
             })?;
         }
 
@@ -348,17 +387,33 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         for k in 0..num_modes {
             let sub = format!("mode_{k}");
             let level = format!("face_block_avg_mode_{k}");
-            run_one(&subjects, &labels, &results_dir, "hammerAP", "mvmd", &level, "_roi", n_perm, primary_t, seed, move |f| {
-                aggregate_face_blocks(f, "/06fc/mvmd/blocks_std_roi", Some(&sub), "fisher_z")
-            })?;
+            let idx = std::sync::Arc::clone(&roi_idx);
+            if cfg.roi_selection.stratified_decomposition {
+                run_one(&subjects, &labels, &results_dir, "hammerAP", "mvmd", &level, "_roi", n_perm, primary_t, seed, move |f| {
+                    aggregate_face_blocks(f, "/06fc/mvmd/blocks_std_roi", Some(&sub), "fisher_z")
+                })?;
+            } else {
+                run_one(&subjects, &labels, &results_dir, "hammerAP", "mvmd", &level, "_roi", n_perm, primary_t, seed, move |f| {
+                    let full = aggregate_face_blocks(f, "/06fc/mvmd/blocks_std", Some(&sub), "fisher_z")?;
+                    Ok(full.map(|m| extract_roi_submatrix(&m, &idx)))
+                })?;
+            }
         }
 
         // hammerAP MVMD band ROI
         for &(band, _, _) in SLOW_BANDS {
             let level = format!("face_block_avg_{band}");
-            run_one(&subjects, &labels, &results_dir, "hammerAP", "mvmd_band", &level, "_roi", n_perm, primary_t, seed, move |f| {
-                aggregate_face_blocks(f, "/06fc/mvmd/blocks_std_roi", Some(band), "fisher_z_mean")
-            })?;
+            let idx = std::sync::Arc::clone(&roi_idx);
+            if cfg.roi_selection.stratified_decomposition {
+                run_one(&subjects, &labels, &results_dir, "hammerAP", "mvmd_band", &level, "_roi", n_perm, primary_t, seed, move |f| {
+                    aggregate_face_blocks(f, "/06fc/mvmd/blocks_std_roi", Some(band), "fisher_z_mean")
+                })?;
+            } else {
+                run_one(&subjects, &labels, &results_dir, "hammerAP", "mvmd_band", &level, "_roi", n_perm, primary_t, seed, move |f| {
+                    let full = aggregate_face_blocks(f, "/06fc/mvmd/blocks_std", Some(band), "fisher_z_mean")?;
+                    Ok(full.map(|m| extract_roi_submatrix(&m, &idx)))
+                })?;
+            }
         }
     }
 

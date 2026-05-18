@@ -52,7 +52,7 @@ pub fn run_permutation(
                 let obs_abs = obs_t_abs_arc.view();
 
                 let mut rng = ChaCha20Rng::seed_from_u64(
-                    seed.wrapping_add(perm_idx as u64 * 6_364_136_223_846_793_005),
+                    seed.wrapping_add((perm_idx as u64).wrapping_mul(6_364_136_223_846_793_005)),
                 );
                 let mut perm_labels = (*labels_arc).clone();
                 perm_labels.shuffle(&mut rng);

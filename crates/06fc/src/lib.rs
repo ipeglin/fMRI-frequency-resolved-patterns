@@ -812,7 +812,9 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                                 cfg.force,
                                 None,
                             )?;
-                            if !cfg.roi_selection.is_empty() {
+                            if cfg.roi_selection.stratified_decomposition
+                                && !cfg.roi_selection.is_empty()
+                            {
                                 let fp = cfg.roi_selection.fingerprint();
                                 fc_for_mvmd_subgroup(
                                     &mvmd_root,
@@ -849,7 +851,9 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                                 cfg.force,
                                 None,
                             )?;
-                            if !cfg.roi_selection.is_empty() {
+                            if cfg.roi_selection.stratified_decomposition
+                                && !cfg.roi_selection.is_empty()
+                            {
                                 let fp = cfg.roi_selection.fingerprint();
                                 fc_for_mvmd_blocks(
                                     &mvmd_root,

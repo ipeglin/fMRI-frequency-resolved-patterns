@@ -24,6 +24,7 @@ fn scrub_row_inplace(row: &mut [f32]) -> usize {
 
 use utils::bids_filename::BidsFilename;
 pub use utils::bids_subject_id::BidsSubjectId;
+use utils::config::AppConfig;
 use utils::hdf5_io;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +62,38 @@ impl std::str::FromStr for FeatureSource {
             _ => Err(format!("unknown FeatureSource: {}", s)),
         }
     }
+}
+
+/// Returns the `FeatureSource` variants to run for restAP analyses, based on
+/// whether ROI-stratified decomposition was performed. When
+/// `stratified_decomposition` is `false`, the `HhtRoiStratified*` sources are
+/// omitted — no `_roi` HDF5 groups exist on disk.
+pub fn enabled_rest_sources(cfg: &AppConfig) -> Vec<FeatureSource> {
+    let mut v = vec![
+        FeatureSource::Ts,
+        FeatureSource::Cwt,
+        FeatureSource::Hht,
+        FeatureSource::HhtSmoothed,
+    ];
+    if cfg.roi_selection.stratified_decomposition {
+        v.push(FeatureSource::HhtRoiStratified);
+        v.push(FeatureSource::HhtRoiStratifiedSmoothed);
+    }
+    v
+}
+
+/// Returns the `FeatureSource` variants to run for hammerAP analyses.
+pub fn enabled_hammer_sources(cfg: &AppConfig) -> Vec<FeatureSource> {
+    let mut v = vec![
+        FeatureSource::Cwt,
+        FeatureSource::Hht,
+        FeatureSource::HhtSmoothed,
+    ];
+    if cfg.roi_selection.stratified_decomposition {
+        v.push(FeatureSource::HhtRoiStratified);
+        v.push(FeatureSource::HhtRoiStratifiedSmoothed);
+    }
+    v
 }
 
 /// One of the five DenseNet feature extraction strategies emitted by

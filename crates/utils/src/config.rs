@@ -80,7 +80,12 @@ impl AppConfig {
         }
         let mut leaf = self.roi_selection.name.clone();
         if !self.roi_selection.cortical_networks.is_empty() {
-            let mut nets = self.roi_selection.cortical_networks.clone();
+            let mut nets: Vec<String> = self
+                .roi_selection
+                .cortical_networks
+                .iter()
+                .map(|r| r.name().to_string())
+                .collect();
             nets.sort();
             leaf.push_str("__net-");
             leaf.push_str(&nets.join("_"));
@@ -549,7 +554,7 @@ mod tests {
         let mut cfg = AppConfig::default();
         cfg.classification_results_dir = PathBuf::from("/results");
         cfg.roi_selection.name = "vpfc_mpfc_amy".to_string();
-        cfg.roi_selection.cortical_networks = vec!["LimbicB".to_string(), "LimbicA".to_string()];
+        cfg.roi_selection.cortical_networks = vec!["LimbicB".into(), "LimbicA".into()];
         assert_eq!(
             cfg.resolved_classification_results_dir(),
             PathBuf::from("/results/vpfc_mpfc_amy__net-LimbicA_LimbicB")

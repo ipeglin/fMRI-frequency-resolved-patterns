@@ -511,12 +511,10 @@ impl MVMD {
                     } else {
                         omega_k
                     }
+                } else if total_power > 0.0 {
+                    weighted_sum / total_power
                 } else {
-                    if total_power > 0.0 {
-                        weighted_sum / total_power
-                    } else {
-                        omega_k
-                    }
+                    omega_k
                 };
             }
 

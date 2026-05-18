@@ -165,6 +165,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     sampling_rate: cfg.task_sampling_rate,
                     hht_smoothed: cfg.feature_extraction.hht_smoothed,
                     hht_ie: cfg.feature_extraction.hht_ie,
+                    roi_stratified_decomposition: cfg.roi_selection.stratified_decomposition,
                 };
                 strategies::run_for_file(&ctx, &h5_file)
             })();

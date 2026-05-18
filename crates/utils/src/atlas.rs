@@ -3,10 +3,85 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Hemisphere {
     Left,
     Right,
+}
+
+/// Per-region hemisphere filter used in `RoiSelectionSpec`. `LH` / `RH`
+/// restrict selection to a single hemisphere; bare region entries (no filter)
+/// match both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum HemiFilter {
+    LH,
+    RH,
+}
+
+impl HemiFilter {
+    fn matches(self, hemi: Hemisphere) -> bool {
+        matches!(
+            (self, hemi),
+            (HemiFilter::LH, Hemisphere::Left) | (HemiFilter::RH, Hemisphere::Right)
+        )
+    }
+}
+
+/// A single entry in a `cortical_regions`, `cortical_networks`, or
+/// `subcortical_regions` list. Either a bare region name (matches both
+/// hemispheres) or an inline table with an explicit hemisphere pin.
+///
+/// In `config.toml`:
+/// ```toml
+/// cortical_regions = ["PFCv", { region = "PFCm", hemisphere = "LH" }]
+/// ```
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum RoiSpec {
+    WithHemi { region: String, hemisphere: HemiFilter },
+    Bare(String),
+}
+
+impl RoiSpec {
+    /// Region name used for matching (the bare string or the `region` field).
+    pub fn name(&self) -> &str {
+        match self {
+            RoiSpec::Bare(s) => s,
+            RoiSpec::WithHemi { region, .. } => region,
+        }
+    }
+
+    /// True when this spec entry matches `name` (exact) AND `hemi`.
+    pub fn matches_name_and_hemi(&self, name: &str, hemi: Hemisphere) -> bool {
+        match self {
+            RoiSpec::Bare(s) => s == name,
+            RoiSpec::WithHemi { region, hemisphere } => region == name && hemisphere.matches(hemi),
+        }
+    }
+
+    /// True when this spec entry's name is a substring of `full_name` AND
+    /// `hemi` is compatible (bare = any, WithHemi = specific).
+    pub fn contains_name_and_hemi(&self, full_name: &str, hemi: Hemisphere) -> bool {
+        match self {
+            RoiSpec::Bare(s) => full_name.contains(s.as_str()),
+            RoiSpec::WithHemi { region, hemisphere } => {
+                full_name.contains(region.as_str()) && hemisphere.matches(hemi)
+            }
+        }
+    }
+}
+
+impl From<&str> for RoiSpec {
+    fn from(s: &str) -> Self {
+        RoiSpec::Bare(s.to_string())
+    }
+}
+
+impl From<String> for RoiSpec {
+    fn from(s: String) -> Self {
+        RoiSpec::Bare(s)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,9 +288,15 @@ impl BrainAtlas {
                         return None;
                     }
                     let region_ok = spec.cortical_regions.is_empty()
-                        || spec.cortical_regions.iter().any(|r| r == region);
+                        || spec
+                            .cortical_regions
+                            .iter()
+                            .any(|r| r.matches_name_and_hemi(region, e.hemisphere));
                     let network_ok = spec.cortical_networks.is_empty()
-                        || spec.cortical_networks.iter().any(|n| n == network);
+                        || spec
+                            .cortical_networks
+                            .iter()
+                            .any(|n| n.matches_name_and_hemi(network, e.hemisphere));
                     if region_ok && network_ok {
                         Some(SelectedRoi {
                             row_index: e.index as usize,
@@ -231,11 +312,11 @@ impl BrainAtlas {
                 RoiType::Subcortical { region, .. } => spec
                     .subcortical_regions
                     .iter()
-                    .find(|pat| region.contains(pat.as_str()))
+                    .find(|pat| pat.contains_name_and_hemi(region, e.hemisphere))
                     .map(|matched| SelectedRoi {
                         row_index: self.n_cortical + e.index as usize,
                         label: e.id.clone(),
-                        matched_region: matched.clone(),
+                        matched_region: matched.name().to_string(),
                         hemisphere: e.hemisphere,
                         kind: "subcortical",
                     }),
@@ -262,32 +343,45 @@ pub struct SelectedRoi {
 }
 
 /// User-facing ROI selection spec. Source of truth for which atlas rows feed
-/// the spec-dependent pipeline stages (04mvmd `_roi`, 05hilbert `_roi`,
-/// 06fc `_roi`, 07feature_extraction). Empty cortical+subcortical lists mean
-/// "no subset" — currently only relevant for future "all ROIs" mode.
+/// the spec-dependent pipeline stages (07feature_extraction, 09fc_analysis).
+/// Empty cortical+subcortical lists mean "no subset".
+///
+/// Each entry in `cortical_regions`, `cortical_networks`, and
+/// `subcortical_regions` is either a bare region name (both hemispheres) or an
+/// inline table `{ region = "...", hemisphere = "LH" }` for hemisphere-pinned
+/// selection.
 ///
 /// Cortical filtering combines `cortical_regions` and `cortical_networks` as
 /// an intersection: a cortical ROI is included only when it matches every
 /// axis that has a non-empty list. An empty list on a given axis means "no
-/// constraint on this axis" (e.g. empty `cortical_networks` = all networks
-/// allowed). Cortical inclusion still requires at least one axis to be
-/// specified — leaving both empty selects no cortical rows.
+/// constraint on this axis". Cortical inclusion requires at least one axis.
+///
+/// `stratified_decomposition` (default `false`): when `true`, stage 04 runs a
+/// separate MVMD pass on the ROI-subset rows in addition to the full-signal
+/// pass, producing `_roi` HDF5 groups. When `false` (the default), only the
+/// full-signal multi-channel decomp is run and ROIs are extracted post-hoc
+/// from the derived modes.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct RoiSelectionSpec {
     /// Human-readable identifier used in HDF5 attrs and output dir naming.
     #[serde(default)]
     pub name: String,
     /// Exact match against `RoiType::Cortical.region` (e.g. `"PFCm"`).
+    /// Each entry may optionally pin a hemisphere.
     #[serde(default)]
-    pub cortical_regions: Vec<String>,
+    pub cortical_regions: Vec<RoiSpec>,
     /// Exact match against `RoiType::Cortical.network` (e.g. `"LimbicA"`).
     /// Intersected with `cortical_regions` when both are non-empty.
     #[serde(default)]
-    pub cortical_networks: Vec<String>,
+    pub cortical_networks: Vec<RoiSpec>,
     /// Substring match against `RoiType::Subcortical.region` (e.g. `"AMY"`
-    /// catches `lAMY` and `mAMY`).
+    /// catches `lAMY` and `mAMY`). Each entry may optionally pin a hemisphere.
     #[serde(default)]
-    pub subcortical_regions: Vec<String>,
+    pub subcortical_regions: Vec<RoiSpec>,
+    /// Run a separate ROI-stratified MVMD decomposition in addition to the
+    /// full-signal pass. Default `false` — ROIs extracted post-hoc.
+    #[serde(default)]
+    pub stratified_decomposition: bool,
 }
 
 impl RoiSelectionSpec {
@@ -301,23 +395,72 @@ impl RoiSelectionSpec {
     /// stored fingerprint on an HDF5 group and the current config means the
     /// data was produced under a different selection and must be regenerated.
     ///
-    /// Format: `"{name}:{cortical_regions}|{subcortical_regions}"` when
-    /// `cortical_networks` is empty (preserves fingerprints for configs that
-    /// never opt into network filtering). When networks are specified the
-    /// suffix `|net={cortical_networks}` is appended.
+    /// Base format: `"{name}:{sorted_cort_names}|{sorted_subc_names}"`. Bare
+    /// entries (no hemisphere) produce the same fingerprint as before this
+    /// change — backward compatible with existing HDF5 attrs.
+    ///
+    /// Extended suffixes (only when used):
+    /// - `|net={sorted_networks}` — when `cortical_networks` is non-empty
+    /// - `|hemi=cort:{...};net:{...};subc:{...}` — when any entry pins a hemi
+    /// - `|strat=1` — when `stratified_decomposition` is true
     pub fn fingerprint(&self) -> String {
-        let mut cort = self.cortical_regions.clone();
-        cort.sort();
-        let mut subc = self.subcortical_regions.clone();
-        subc.sort();
+        let sorted_names = |specs: &[RoiSpec]| -> Vec<String> {
+            let mut v: Vec<String> = specs.iter().map(|r| r.name().to_string()).collect();
+            v.sort();
+            v
+        };
+
+        let cort = sorted_names(&self.cortical_regions);
+        let subc = sorted_names(&self.subcortical_regions);
         let base = format!("{}:{}|{}", self.name, cort.join(","), subc.join(","));
-        if self.cortical_networks.is_empty() {
+
+        let mut fp = if self.cortical_networks.is_empty() {
             base
         } else {
-            let mut nets = self.cortical_networks.clone();
-            nets.sort();
+            let nets = sorted_names(&self.cortical_networks);
             format!("{}|net={}", base, nets.join(","))
+        };
+
+        let has_hemi_pin = self
+            .cortical_regions
+            .iter()
+            .chain(&self.cortical_networks)
+            .chain(&self.subcortical_regions)
+            .any(|r| matches!(r, RoiSpec::WithHemi { .. }));
+
+        if has_hemi_pin {
+            let encode_hemi_list = |specs: &[RoiSpec]| -> String {
+                let mut parts: Vec<String> = specs
+                    .iter()
+                    .map(|r| match r {
+                        RoiSpec::Bare(n) => n.clone(),
+                        RoiSpec::WithHemi { region, hemisphere } => format!(
+                            "{}@{}",
+                            region,
+                            match hemisphere {
+                                HemiFilter::LH => "LH",
+                                HemiFilter::RH => "RH",
+                            }
+                        ),
+                    })
+                    .collect();
+                parts.sort();
+                parts.join(",")
+            };
+            fp = format!(
+                "{}|hemi=cort:{};net:{};subc:{}",
+                fp,
+                encode_hemi_list(&self.cortical_regions),
+                encode_hemi_list(&self.cortical_networks),
+                encode_hemi_list(&self.subcortical_regions),
+            );
         }
+
+        if self.stratified_decomposition {
+            fp = format!("{}|strat=1", fp);
+        }
+
+        fp
     }
 }
 
@@ -389,6 +532,7 @@ mod tests {
             cortical_regions: vec!["PFCm".into()],
             cortical_networks: vec![],
             subcortical_regions: vec![],
+            stratified_decomposition: false,
         };
         let sel = atlas.selected_rois(&spec);
         let labels: Vec<&str> = sel.iter().map(|r| r.label.as_str()).collect();
@@ -406,6 +550,7 @@ mod tests {
             cortical_regions: vec![],
             cortical_networks: vec!["LimbicA".into(), "LimbicB".into()],
             subcortical_regions: vec![],
+            stratified_decomposition: false,
         };
         let sel = atlas.selected_rois(&spec);
         let labels: Vec<&str> = sel.iter().map(|r| r.label.as_str()).collect();
@@ -424,6 +569,7 @@ mod tests {
             cortical_regions: vec!["PFCv".into(), "PFCm".into()],
             cortical_networks: vec!["LimbicA".into(), "LimbicB".into()],
             subcortical_regions: vec![],
+            stratified_decomposition: false,
         };
         let sel = atlas.selected_rois(&spec);
         assert_eq!(sel.len(), 4);
@@ -441,10 +587,73 @@ mod tests {
             cortical_regions: vec![],
             cortical_networks: vec![],
             subcortical_regions: vec!["AMY".into()],
+            stratified_decomposition: false,
         };
         let sel = atlas.selected_rois(&spec);
         assert_eq!(sel.len(), 2);
         assert!(sel.iter().all(|r| r.kind == "subcortical"));
+    }
+
+    #[test]
+    fn hemi_filter_lh_excludes_rh_cortical() {
+        let atlas = fixture_atlas();
+        let spec = RoiSelectionSpec {
+            name: "t".into(),
+            cortical_regions: vec![RoiSpec::WithHemi {
+                region: "PFCm".into(),
+                hemisphere: HemiFilter::LH,
+            }],
+            cortical_networks: vec![],
+            subcortical_regions: vec![],
+            stratified_decomposition: false,
+        };
+        let sel = atlas.selected_rois(&spec);
+        assert!(sel.iter().all(|r| r.hemisphere == Hemisphere::Left));
+        assert!(sel.iter().any(|r| r.label.contains("LH")));
+        assert!(sel.iter().all(|r| !r.label.contains("RH")));
+    }
+
+    #[test]
+    fn hemi_filter_subcortical_rh_only() {
+        let atlas = fixture_atlas();
+        let spec = RoiSelectionSpec {
+            name: "t".into(),
+            cortical_regions: vec![],
+            cortical_networks: vec![],
+            subcortical_regions: vec![RoiSpec::WithHemi {
+                region: "AMY".into(),
+                hemisphere: HemiFilter::RH,
+            }],
+            stratified_decomposition: false,
+        };
+        let sel = atlas.selected_rois(&spec);
+        assert_eq!(sel.len(), 1);
+        assert_eq!(sel[0].label, "mAMY-rh");
+        assert_eq!(sel[0].hemisphere, Hemisphere::Right);
+    }
+
+    #[test]
+    fn hemi_bare_and_pinned_mix() {
+        let atlas = fixture_atlas();
+        let spec = RoiSelectionSpec {
+            name: "t".into(),
+            cortical_regions: vec![
+                RoiSpec::Bare("PFCv".into()),
+                RoiSpec::WithHemi {
+                    region: "PFCm".into(),
+                    hemisphere: HemiFilter::LH,
+                },
+            ],
+            cortical_networks: vec![],
+            subcortical_regions: vec![],
+            stratified_decomposition: false,
+        };
+        let sel = atlas.selected_rois(&spec);
+        // PFCv: both hemis (2); PFCm LH only (2 networks in fixture)
+        let pfcv: Vec<_> = sel.iter().filter(|r| r.matched_region == "PFCv").collect();
+        let pfcm: Vec<_> = sel.iter().filter(|r| r.matched_region == "PFCm").collect();
+        assert_eq!(pfcv.len(), 2);
+        assert!(pfcm.iter().all(|r| r.hemisphere == Hemisphere::Left));
     }
 
     #[test]
@@ -454,6 +663,7 @@ mod tests {
             cortical_regions: vec!["PFCm".into(), "PFCv".into()],
             cortical_networks: vec![],
             subcortical_regions: vec!["AMY".into()],
+            stratified_decomposition: false,
         };
         assert_eq!(spec.fingerprint(), "vpfc_mpfc_amy:PFCm,PFCv|AMY");
     }
@@ -465,8 +675,54 @@ mod tests {
             cortical_regions: vec!["PFCm".into()],
             cortical_networks: vec!["LimbicB".into(), "LimbicA".into()],
             subcortical_regions: vec![],
+            stratified_decomposition: false,
         };
         assert_eq!(spec.fingerprint(), "limbic_pfc:PFCm||net=LimbicA,LimbicB");
+    }
+
+    #[test]
+    fn fingerprint_hemi_segment_added_when_pinned() {
+        let spec = RoiSelectionSpec {
+            name: "test".into(),
+            cortical_regions: vec![
+                "PFCv".into(),
+                RoiSpec::WithHemi {
+                    region: "PFCm".into(),
+                    hemisphere: HemiFilter::LH,
+                },
+            ],
+            cortical_networks: vec![],
+            subcortical_regions: vec!["AMY".into()],
+            stratified_decomposition: false,
+        };
+        let fp = spec.fingerprint();
+        assert!(fp.contains("|hemi="));
+        assert!(fp.contains("PFCm@LH"));
+        assert!(fp.contains("PFCv"));
+    }
+
+    #[test]
+    fn fingerprint_strat_suffix() {
+        let spec = RoiSelectionSpec {
+            name: "test".into(),
+            cortical_regions: vec!["PFCm".into()],
+            cortical_networks: vec![],
+            subcortical_regions: vec![],
+            stratified_decomposition: true,
+        };
+        assert!(spec.fingerprint().ends_with("|strat=1"));
+    }
+
+    #[test]
+    fn fingerprint_no_strat_suffix_when_false() {
+        let spec = RoiSelectionSpec {
+            name: "test".into(),
+            cortical_regions: vec!["PFCm".into()],
+            cortical_networks: vec![],
+            subcortical_regions: vec![],
+            stratified_decomposition: false,
+        };
+        assert!(!spec.fingerprint().contains("|strat="));
     }
 
     #[test]

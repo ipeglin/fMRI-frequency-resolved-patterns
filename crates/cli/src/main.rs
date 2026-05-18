@@ -367,7 +367,7 @@ fn main() -> Result<()> {
         }
         Command::Classify {
             consolidated_data_dir,
-            data_splitting_dir,
+            data_splitting_dir: _,
             classification_results_dir,
         } => {
             if let Some(v) = consolidated_data_dir {
