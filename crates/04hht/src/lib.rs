@@ -35,7 +35,6 @@ const FULL_RUN_GROUP_NA: &str = "full_run_std_na";
 const FULL_RUN_GROUP_ROI_NA: &str = "full_run_std_roi_na";
 const ALL_BLOCKS_GROUP_NA: &str = "blocks_std_na";
 const ALL_BLOCKS_GROUP_ROI_NA: &str = "blocks_std_roi_na";
-const TARGET_TRIAL_TYPES: &[&str] = &["face"];
 
 /// One-sided power spectrum of a single channel (normalised by N). Returns `n/2+1` values.
 fn compute_psd_channel(signal: &[f32]) -> Vec<f64> {
@@ -705,8 +704,19 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                 .group("blocks_std")
                 .context("missing /02fmri_segment_trials/blocks_std")?;
 
-            for trial_type in TARGET_TRIAL_TYPES {
-                if !path_exists(&src_blocks, trial_type) {
+            let trial_types: Vec<String> = src_blocks
+                .member_names()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|n| !n.starts_with("block_"))
+                .collect();
+            info!(
+                task_name,
+                ?trial_types,
+                "detected trial types in blocks_std"
+            );
+            for trial_type in &trial_types {
+                if !path_exists(&src_blocks, trial_type.as_str()) {
                     warn!(
                         task_name,
                         trial_type, "trial type group not found, skipping"

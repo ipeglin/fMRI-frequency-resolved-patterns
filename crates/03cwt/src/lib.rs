@@ -20,8 +20,6 @@ const CWT_CRATE_GROUP: &str = "03cwt";
 const FULL_RUN_DATASET: &str = "full_run_std";
 const BLOCKS_GROUP: &str = "blocks_std";
 
-const TARGET_TRIAL_TYPES: &[&str] = &["face"];
-
 // Other params
 const ANGULAR_FREQ: f64 = 6.0; // Angular center frequency
 const NUM_SCALES: usize = 224; // DenseNet201 height
@@ -309,9 +307,20 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             let cwt_blocks_group = ensure_path(&h5_file, &cwt_blocks_group, cfg.force)
                 .context("Failed to prepare deep HDF5 path")?;
 
-            for trial_type in TARGET_TRIAL_TYPES {
+            let trial_types: Vec<String> = blocks_std_group
+                .member_names()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|n| !n.starts_with("block_"))
+                .collect();
+            info!(
+                task_name = task_name,
+                ?trial_types,
+                "detected trial types in blocks_std"
+            );
+            for trial_type in &trial_types {
                 let trial_group_path = format!("/02fmri_segment_trials/blocks_std/{trial_type}");
-                if !path_exists(&blocks_std_group, trial_type) {
+                if !path_exists(&blocks_std_group, trial_type.as_str()) {
                     warn!(
                         task_name = task_name,
                         trial_type = trial_type,

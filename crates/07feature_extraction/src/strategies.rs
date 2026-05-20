@@ -37,6 +37,11 @@ pub const CHUNK_COUNT: i64 = 3;
 pub const TASK_COMMON_BLOCK_W: i64 = 23;
 pub const SHUFFLE_SEED: u64 = 42;
 
+/// Trial types included in classification feature extraction. Shape blocks are
+/// excluded here to keep 08classification scope identical while stage 03/04
+/// emit all conditions for FC analysis.
+const CLASSIFICATION_TRIAL_TYPES: &[&str] = &["face"];
+
 /// Which upstream spectrum source feeds the analysis.
 #[derive(Debug, Clone, Copy)]
 pub enum FeatureSrc {
@@ -265,11 +270,12 @@ fn load_cwt_blocks(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Vec<(String, Te
         Err(_) => return Ok(vec![]),
     };
     // CWT writes blocks_std/{trial_type}/{block_name}, not blocks_std/{block_name}.
-    let trial_types: Vec<String> = blocks_parent
+    let mut trial_types: Vec<String> = blocks_parent
         .member_names()?
         .into_iter()
         .filter(|n| !n.starts_with("block_"))
         .collect();
+    trial_types.retain(|t| CLASSIFICATION_TRIAL_TYPES.contains(&t.as_str()));
     let mut out = Vec::new();
     for trial_type in &trial_types {
         let trial_group = match blocks_parent.group(trial_type) {
@@ -422,11 +428,12 @@ fn load_hht_blocks(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Vec<(String, Te
         Ok(g) => g,
         Err(_) => return Ok(vec![]),
     };
-    let trial_types: Vec<String> = blocks_parent
+    let mut trial_types: Vec<String> = blocks_parent
         .member_names()?
         .into_iter()
         .filter(|n| !n.starts_with("block_"))
         .collect();
+    trial_types.retain(|t| CLASSIFICATION_TRIAL_TYPES.contains(&t.as_str()));
     let mut out = Vec::new();
     for trial_type in &trial_types {
         let trial_group = match blocks_parent.group(trial_type) {
@@ -503,11 +510,12 @@ fn load_hht_roi_blocks(h5: &hdf5::File, ctx: &AnalysisCtx) -> Result<Vec<(String
         Ok(g) => g,
         Err(_) => return Ok(vec![]),
     };
-    let trial_types: Vec<String> = blocks_parent
+    let mut trial_types: Vec<String> = blocks_parent
         .member_names()?
         .into_iter()
         .filter(|n| !n.starts_with("block_"))
         .collect();
+    trial_types.retain(|t| CLASSIFICATION_TRIAL_TYPES.contains(&t.as_str()));
     let mut out = Vec::new();
     for trial_type in &trial_types {
         let trial_group = match blocks_parent.group(trial_type) {
