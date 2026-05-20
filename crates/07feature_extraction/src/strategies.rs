@@ -18,7 +18,7 @@
 //! file. Existing groups are left in place unless `force` is set.
 
 use anyhow::{Context, Result};
-use hdf5::types::TypeDescriptor;
+use hdf5::types::{TypeDescriptor, VarLenUnicode};
 use std::time::Instant;
 use tch::{Kind, Tensor};
 use tracing::{debug, info};
@@ -1085,11 +1085,58 @@ pub fn run_task_averaged_resized(
 /// Dispatch the appropriate strategy set for a single subject file based on the
 /// task name parsed from its BIDS filename.
 ///
+/// Write (or overwrite) the `roi_selection_fingerprint` attr on `group`.
+///
+/// HDF5 doesn't allow creating a duplicate attr, so we delete the existing
+/// one first (via the C API) before writing the new value.
+fn set_fingerprint_attr(group: &hdf5::Group, fingerprint: &str) -> Result<()> {
+    if group.attr("roi_selection_fingerprint").is_ok() {
+        let name = std::ffi::CString::new("roi_selection_fingerprint")
+            .expect("static string is valid CString");
+        // Safety: group.id() is a valid open HDF5 id; name is a valid C string.
+        unsafe { hdf5_sys::h5a::H5Adelete(group.id(), name.as_ptr()); }
+    }
+    let unicode: VarLenUnicode = fingerprint.parse().unwrap();
+    group
+        .new_attr::<VarLenUnicode>()
+        .shape(())
+        .create("roi_selection_fingerprint")?
+        .as_writer()
+        .write_scalar(&unicode)?;
+    Ok(())
+}
+
+/// Read the stored `roi_selection_fingerprint` attr from `group`, or `None` if absent.
+fn read_fingerprint_attr(group: &hdf5::Group) -> Option<String> {
+    let attr = group.attr("roi_selection_fingerprint").ok()?;
+    attr.read_raw::<VarLenUnicode>()
+        .ok()?
+        .into_iter()
+        .next()
+        .map(|s| s.to_string())
+}
+
 /// `restAP` → A + B for both CWT and HHT (when available).
 /// `hammerAP` → C + D + E for both CWT and HHT (when available).
 pub fn run_for_file(ctx: &AnalysisCtx, h5: &hdf5::File) -> Result<()> {
     let features_root = open_or_create_group(h5, "07feature_extraction", false)
         .context("failed to open features/ root group")?;
+
+    // Skip the whole file if the stored fingerprint matches the current config
+    // and force is not set. This avoids redundant forward passes when the pipeline
+    // is re-run with an identical ROI selection.
+    if !ctx.force
+        && read_fingerprint_attr(&features_root)
+            .is_some_and(|s| s == ctx.roi_selection_fingerprint)
+    {
+        info!(
+            subject = ctx.subject_id,
+            task = ctx.task_name,
+            fingerprint = %ctx.roi_selection_fingerprint,
+            "fingerprint match — skipping feature extraction for file"
+        );
+        return Ok(());
+    }
 
     match ctx.task_name {
         "restAP" => {
@@ -1380,6 +1427,9 @@ pub fn run_for_file(ctx: &AnalysisCtx, h5: &hdf5::File) -> Result<()> {
             );
         }
     }
+
+    // Update stored fingerprint so subsequent runs can skip this file.
+    set_fingerprint_attr(&features_root, ctx.roi_selection_fingerprint)?;
 
     Ok(())
 }
