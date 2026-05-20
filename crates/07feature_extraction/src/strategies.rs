@@ -24,7 +24,7 @@ use tch::{Kind, Tensor};
 use tracing::{debug, info};
 use utils::config::ImageFitMode;
 use utils::frequency_bands;
-use utils::hdf5_io::{H5Attr, open_or_create_group, write_attrs, write_dataset_old};
+use utils::hdf5_io::{H5Attr, open_or_create_group, write_attrs, write_dataset};
 use utils::roi_migration::check_roi_fingerprint;
 
 use crate::FeatureExtractor;
@@ -645,9 +645,9 @@ fn write_features(
     let per_roi_buf = tensor_to_vec_f32(per_roi);
     let mean_buf = tensor_to_vec_f32(mean);
     let roi_idx_u32: Vec<u32> = ctx.roi_indices.iter().map(|&i| i as u32).collect();
-    write_dataset_old(&group, "per_roi", &per_roi_buf, &[n_rois, feat_dim], None)?;
-    write_dataset_old(&group, "mean", &mean_buf, &[feat_dim], None)?;
-    write_dataset_old(&group, "roi_indices", &roi_idx_u32, &[n_rois], None)?;
+    write_dataset(&group, "per_roi", &per_roi_buf, &[n_rois, feat_dim], None, ctx.force)?;
+    write_dataset(&group, "mean", &mean_buf, &[feat_dim], None, ctx.force)?;
+    write_dataset(&group, "roi_indices", &roi_idx_u32, &[n_rois], None, ctx.force)?;
     write_attrs(
         &group,
         &[
@@ -866,9 +866,9 @@ fn write_features_resized(
     let per_roi_buf = tensor_to_vec_f32(per_roi);
     let mean_buf = tensor_to_vec_f32(mean);
     let roi_idx_u32: Vec<u32> = ctx.roi_indices.iter().map(|&i| i as u32).collect();
-    write_dataset_old(&group, "per_roi", &per_roi_buf, &[n_rois, feat_dim], None)?;
-    write_dataset_old(&group, "mean", &mean_buf, &[feat_dim], None)?;
-    write_dataset_old(&group, "roi_indices", &roi_idx_u32, &[n_rois], None)?;
+    write_dataset(&group, "per_roi", &per_roi_buf, &[n_rois, feat_dim], None, ctx.force)?;
+    write_dataset(&group, "mean", &mean_buf, &[feat_dim], None, ctx.force)?;
+    write_dataset(&group, "roi_indices", &roi_idx_u32, &[n_rois], None, ctx.force)?;
     write_attrs(
         &group,
         &[
