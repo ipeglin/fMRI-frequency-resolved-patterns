@@ -587,8 +587,7 @@ fn extract(ctx: &AnalysisCtx, src: FeatureSrc, spec: &Tensor) -> (Tensor, Tensor
     let per_roi = ctx
         .extractor
         .extract_features(&batch)
-        .to_kind(Kind::Float)
-        .to_device(tch::Device::Cpu);
+        .to_kind(Kind::Float);
     let mean = per_roi.mean_dim(Some([0i64].as_slice()), false, Kind::Float);
     (per_roi, mean)
 }
@@ -606,8 +605,7 @@ fn extract_with_fit(
     let per_roi = ctx
         .extractor
         .extract_features(&batch)
-        .to_kind(Kind::Float)
-        .to_device(tch::Device::Cpu);
+        .to_kind(Kind::Float);
     let mean = per_roi.mean_dim(Some([0i64].as_slice()), false, Kind::Float);
     (per_roi, mean)
 }

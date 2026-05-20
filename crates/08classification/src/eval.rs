@@ -410,8 +410,9 @@ fn run_knn_pipeline(
     drop(x_calib_n);
     drop(x_holdout_n);
 
-    // Calibrate on the calibration split. Val (holdout) is never touched here.
+    // Calibrator is fit on the calibration split only (no holdout leakage).
     // Selector: isotonic for n > 1000, Platt for n ≤ 1000.
+    // The fitted calibrator is then applied to both splits to produce p1_cal.
     let calibrator = CalibratorKind::fit_auto(&p1_calib_raw, &y_calib);
     let p1_calib_cal = calibrator.transform_slice(&p1_calib_raw);
     let p1_holdout_cal = calibrator.transform_slice(&p1_holdout_raw);
@@ -798,6 +799,7 @@ fn run_rf_pipeline(
     drop(x_calib_n);
     drop(x_holdout_n);
 
+    // Calibrator fit on calibration split only; applied to both splits.
     let calibrator = CalibratorKind::fit_auto(&p1_calib_raw, &y_calib);
     let p1_calib_cal = calibrator.transform_slice(&p1_calib_raw);
     let p1_holdout_cal = calibrator.transform_slice(&p1_holdout_raw);
