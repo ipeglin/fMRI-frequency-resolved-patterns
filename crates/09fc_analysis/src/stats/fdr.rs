@@ -4,7 +4,8 @@ pub fn bh_fdr(p_values: &[f64]) -> Vec<f64> {
     if n == 0 {
         return vec![];
     }
-    let mut indexed: Vec<(usize, f64)> = p_values.iter().enumerate().map(|(i, &p)| (i, p)).collect();
+    let mut indexed: Vec<(usize, f64)> =
+        p_values.iter().enumerate().map(|(i, &p)| (i, p)).collect();
     indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
     let mut q = vec![1.0f64; n];
     let mut min_q = 1.0f64;
@@ -25,7 +26,11 @@ mod tests {
     fn test_bh_fdr_monotone() {
         let p = vec![0.001, 0.01, 0.05, 0.1, 0.5];
         let q = bh_fdr(&p);
-        assert!(q.windows(2).all(|w| w[0] <= w[1]), "q-values not monotone: {:?}", q);
+        assert!(
+            q.windows(2).all(|w| w[0] <= w[1]),
+            "q-values not monotone: {:?}",
+            q
+        );
     }
 
     #[test]

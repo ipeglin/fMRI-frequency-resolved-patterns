@@ -44,60 +44,63 @@ pub fn run_permutation(
     let obs_t_abs_arc = Arc::new(obs_t_abs.clone());
     let labels_arc = Arc::new(labels.to_vec());
 
-    let (count_extreme, max_t_nulls, max_comp_nulls): (Array2<u32>, Vec<f64>, Vec<usize>) =
-        (0..n_perm)
-            .into_par_iter()
-            .map(|perm_idx| {
-                let z = z_arc.view();
-                let obs_abs = obs_t_abs_arc.view();
+    let (count_extreme, max_t_nulls, max_comp_nulls): (Array2<u32>, Vec<f64>, Vec<usize>) = (0
+        ..n_perm)
+        .into_par_iter()
+        .map(|perm_idx| {
+            let z = z_arc.view();
+            let obs_abs = obs_t_abs_arc.view();
 
-                let mut rng = ChaCha20Rng::seed_from_u64(
-                    seed.wrapping_add((perm_idx as u64).wrapping_mul(6_364_136_223_846_793_005)),
-                );
-                let mut perm_labels = (*labels_arc).clone();
-                perm_labels.shuffle(&mut rng);
-
-                let t_null = welch_t_map(z, &perm_labels);
-                let max_t = t_null.iter().map(|v| v.abs()).fold(f64::NEG_INFINITY, f64::max);
-                let supr_null = t_null.mapv(|v| v.abs() >= primary_t);
-                let max_comp = max_component_size(supr_null.view());
-
-                let count_row: Array2<u32> = ndarray::Zip::from(&t_null)
-                    .and(obs_abs)
-                    .map_collect(|&tv, &ov| (tv.abs() >= ov) as u32);
-
-                (count_row, max_t, max_comp)
-            })
-            .fold(
-                || {
-                    (
-                        Array2::<u32>::zeros((c, c)),
-                        Vec::<f64>::new(),
-                        Vec::<usize>::new(),
-                    )
-                },
-                |(mut counts, mut mts, mut mcs), (row, mt, mc)| {
-                    counts += &row;
-                    mts.push(mt);
-                    mcs.push(mc);
-                    (counts, mts, mcs)
-                },
-            )
-            .reduce(
-                || {
-                    (
-                        Array2::<u32>::zeros((c, c)),
-                        Vec::<f64>::new(),
-                        Vec::<usize>::new(),
-                    )
-                },
-                |(mut c1, mut m1, mut mc1), (c2, m2, mc2)| {
-                    c1 += &c2;
-                    m1.extend(m2);
-                    mc1.extend(mc2);
-                    (c1, m1, mc1)
-                },
+            let mut rng = ChaCha20Rng::seed_from_u64(
+                seed.wrapping_add((perm_idx as u64).wrapping_mul(6_364_136_223_846_793_005)),
             );
+            let mut perm_labels = (*labels_arc).clone();
+            perm_labels.shuffle(&mut rng);
+
+            let t_null = welch_t_map(z, &perm_labels);
+            let max_t = t_null
+                .iter()
+                .map(|v| v.abs())
+                .fold(f64::NEG_INFINITY, f64::max);
+            let supr_null = t_null.mapv(|v| v.abs() >= primary_t);
+            let max_comp = max_component_size(supr_null.view());
+
+            let count_row: Array2<u32> = ndarray::Zip::from(&t_null)
+                .and(obs_abs)
+                .map_collect(|&tv, &ov| (tv.abs() >= ov) as u32);
+
+            (count_row, max_t, max_comp)
+        })
+        .fold(
+            || {
+                (
+                    Array2::<u32>::zeros((c, c)),
+                    Vec::<f64>::new(),
+                    Vec::<usize>::new(),
+                )
+            },
+            |(mut counts, mut mts, mut mcs), (row, mt, mc)| {
+                counts += &row;
+                mts.push(mt);
+                mcs.push(mc);
+                (counts, mts, mcs)
+            },
+        )
+        .reduce(
+            || {
+                (
+                    Array2::<u32>::zeros((c, c)),
+                    Vec::<f64>::new(),
+                    Vec::<usize>::new(),
+                )
+            },
+            |(mut c1, mut m1, mut mc1), (c2, m2, mc2)| {
+                c1 += &c2;
+                m1.extend(m2);
+                mc1.extend(mc2);
+                (c1, m1, mc1)
+            },
+        );
 
     let b = n_perm as f64;
     let p_uncorr = count_extreme.mapv(|v| (v as f64 + 1.0) / (b + 1.0));
@@ -108,9 +111,13 @@ pub fn run_permutation(
     });
 
     // BH-FDR on upper triangle.
-    let upper_coords: Vec<(usize, usize)> =
-        (0..c).flat_map(|i| ((i + 1)..c).map(move |j| (i, j))).collect();
-    let upper_p: Vec<f64> = upper_coords.iter().map(|&(i, j)| p_uncorr[[i, j]]).collect();
+    let upper_coords: Vec<(usize, usize)> = (0..c)
+        .flat_map(|i| ((i + 1)..c).map(move |j| (i, j)))
+        .collect();
+    let upper_p: Vec<f64> = upper_coords
+        .iter()
+        .map(|&(i, j)| p_uncorr[[i, j]])
+        .collect();
     let upper_q = bh_fdr(&upper_p);
     let mut q_fdr = Array2::<f64>::ones((c, c));
     for (k, &(i, j)) in upper_coords.iter().enumerate() {

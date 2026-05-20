@@ -1,6 +1,8 @@
 use anyhow::Result;
 use std::path::Path;
-use utils::hdf5_io::{H5Attr, open_or_create, open_or_create_group, write_attrs, write_dataset_old};
+use utils::hdf5_io::{
+    H5Attr, open_or_create, open_or_create_group, write_attrs, write_dataset_old,
+};
 
 use crate::stats::permutation::PermResult;
 
@@ -25,10 +27,34 @@ pub fn write_analysis_result(
     let c = result.obs_t.shape()[0];
     let shape = [c, c];
 
-    write_dataset_old(&grp, "t_map", result.obs_t.as_slice().unwrap(), &shape, None)?;
-    write_dataset_old(&grp, "p_uncorr", result.p_uncorr.as_slice().unwrap(), &shape, None)?;
-    write_dataset_old(&grp, "p_fwer", result.p_fwer.as_slice().unwrap(), &shape, None)?;
-    write_dataset_old(&grp, "q_fdr", result.q_fdr.as_slice().unwrap(), &shape, None)?;
+    write_dataset_old(
+        &grp,
+        "t_map",
+        result.obs_t.as_slice().unwrap(),
+        &shape,
+        None,
+    )?;
+    write_dataset_old(
+        &grp,
+        "p_uncorr",
+        result.p_uncorr.as_slice().unwrap(),
+        &shape,
+        None,
+    )?;
+    write_dataset_old(
+        &grp,
+        "p_fwer",
+        result.p_fwer.as_slice().unwrap(),
+        &shape,
+        None,
+    )?;
+    write_dataset_old(
+        &grp,
+        "q_fdr",
+        result.q_fdr.as_slice().unwrap(),
+        &shape,
+        None,
+    )?;
 
     let mask_u8: Vec<u8> = result.nbs_component_mask.iter().map(|&b| b as u8).collect();
     write_dataset_old(&grp, "nbs_component_mask", &mask_u8, &shape, None)?;
