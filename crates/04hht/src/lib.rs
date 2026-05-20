@@ -204,10 +204,13 @@ fn write_hht_group(
     alpha: f64,
     admm_config: &ADMMConfig,
 ) -> Result<()> {
-    write_attrs(dest, &[
-        H5Attr::u32("num_iterations", num_iterations),
-        H5Attr::u32("converged", converged as u32),
-    ])?;
+    write_attrs(
+        dest,
+        &[
+            H5Attr::u32("num_iterations", num_iterations),
+            H5Attr::u32("converged", converged as u32),
+        ],
+    )?;
 
     // Always-write: modes + center_frequencies attr
     let m_shape = modes.shape();

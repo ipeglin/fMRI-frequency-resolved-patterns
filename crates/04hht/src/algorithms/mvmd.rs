@@ -886,16 +886,12 @@ mod tests {
         // modes to the same center frequency (the bug fixed by the raw-GCS ω-update).
         let num_samples = 512;
         let sampling_rate = 2000.0_f64;
-        let t: Vec<f64> = (0..num_samples)
-            .map(|i| i as f64 / sampling_rate)
-            .collect();
+        let t: Vec<f64> = (0..num_samples).map(|i| i as f64 / sampling_rate).collect();
 
         // Two channels, each a sum of 50 Hz + 200 Hz tones — normalized: 0.025 and 0.1.
         let make_channel = |a1: f64, a2: f64| -> Vec<f64> {
             t.iter()
-                .map(|&ti| {
-                    a1 * (2.0 * PI * 50.0 * ti).sin() + a2 * (2.0 * PI * 200.0 * ti).sin()
-                })
+                .map(|&ti| a1 * (2.0 * PI * 50.0 * ti).sin() + a2 * (2.0 * PI * 200.0 * ti).sin())
                 .collect()
         };
         let data = vec![make_channel(1.0, 0.5), make_channel(0.9, 0.6)];

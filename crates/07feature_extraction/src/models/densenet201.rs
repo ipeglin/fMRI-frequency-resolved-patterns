@@ -34,10 +34,7 @@ impl DenseNet201 {
                 },
             ))
             .add(nn::batch_norm2d(&fp / "norm0", 64, Default::default()))
-            .add_fn(|x| {
-                x.relu()
-                    .max_pool2d([3, 3], [2, 2], [1, 1], [1, 1], false)
-            });
+            .add_fn(|x| x.relu().max_pool2d([3, 3], [2, 2], [1, 1], [1, 1], false));
 
         // Dense Blocks and Transition Layers
         //   Block 1:  6 layers,  64 channels in -> 256 out
