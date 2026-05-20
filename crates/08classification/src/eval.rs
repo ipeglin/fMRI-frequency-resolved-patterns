@@ -98,10 +98,17 @@ struct SplitReport {
 }
 
 #[derive(Debug, Serialize)]
+struct SplitEntry {
+    subjects: Vec<String>,
+    n_controls: usize,
+    n_anhedonic: usize,
+}
+
+#[derive(Debug, Serialize)]
 struct SplitManifest {
-    train: Vec<String>,
-    calibration: Vec<String>,
-    holdout: Vec<String>,
+    train: SplitEntry,
+    calibration: SplitEntry,
+    holdout: SplitEntry,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -140,12 +147,18 @@ struct ClassificationReport {
     split_manifest: SplitManifest,
 }
 
-fn sorted_unique_subjects(indices: &[usize], groups: &[String]) -> Vec<String> {
-    let mut seen = std::collections::BTreeSet::new();
+fn split_entry(indices: &[usize], groups: &[String], ys: &[Label]) -> SplitEntry {
+    let mut seen = std::collections::BTreeMap::new();
     for &i in indices {
-        seen.insert(parse_subject(&groups[i]));
+        seen.entry(parse_subject(&groups[i])).or_insert(ys[i]);
     }
-    seen.into_iter().collect()
+    let n_controls = seen.values().filter(|&&l| l == Label::Control).count();
+    let n_anhedonic = seen.values().filter(|&&l| l == Label::Anhedonic).count();
+    SplitEntry {
+        subjects: seen.into_keys().collect(),
+        n_controls,
+        n_anhedonic,
+    }
 }
 
 /// Group strings produced by `dataset.rs` look like
@@ -304,9 +317,9 @@ fn run_knn_pipeline(
     // Pre-compute everything we need from `groups` before we consume `xs`/`ys`,
     // so the per-row iteration that follows can move rows directly into the
     // split buffers without ever holding the original row twice.
-    let train_subjects = sorted_unique_subjects(&train_idx, groups);
-    let calib_subjects = sorted_unique_subjects(&calibration_idx, groups);
-    let holdout_subjects = sorted_unique_subjects(&holdout_idx, groups);
+    let train_entry = split_entry(&train_idx, groups, &ys);
+    let calib_entry = split_entry(&calibration_idx, groups, &ys);
+    let holdout_entry = split_entry(&holdout_idx, groups, &ys);
     let calib_parsed: Vec<(String, Option<String>, Option<usize>)> =
         calibration_idx.iter().map(|&i| parse_group(&groups[i])).collect();
     let holdout_parsed: Vec<(String, Option<String>, Option<usize>)> =
@@ -497,9 +510,9 @@ fn run_knn_pipeline(
         calibration_predictions,
         holdout_predictions,
         split_manifest: SplitManifest {
-            train: train_subjects,
-            calibration: calib_subjects,
-            holdout: holdout_subjects,
+            train: train_entry,
+            calibration: calib_entry,
+            holdout: holdout_entry,
         },
     };
 
@@ -731,9 +744,9 @@ fn run_rf_pipeline(
     results_dir: &Path,
     pca_n_components: Option<usize>,
 ) -> Result<()> {
-    let train_subjects = sorted_unique_subjects(&train_idx, groups);
-    let calib_subjects = sorted_unique_subjects(&calibration_idx, groups);
-    let holdout_subjects = sorted_unique_subjects(&holdout_idx, groups);
+    let train_entry = split_entry(&train_idx, groups, &ys);
+    let calib_entry = split_entry(&calibration_idx, groups, &ys);
+    let holdout_entry = split_entry(&holdout_idx, groups, &ys);
     let calib_parsed: Vec<(String, Option<String>, Option<usize>)> =
         calibration_idx.iter().map(|&i| parse_group(&groups[i])).collect();
     let holdout_parsed: Vec<(String, Option<String>, Option<usize>)> =
@@ -879,9 +892,9 @@ fn run_rf_pipeline(
         calibration_predictions,
         holdout_predictions,
         split_manifest: SplitManifest {
-            train: train_subjects,
-            calibration: calib_subjects,
-            holdout: holdout_subjects,
+            train: train_entry,
+            calibration: calib_entry,
+            holdout: holdout_entry,
         },
     };
 
