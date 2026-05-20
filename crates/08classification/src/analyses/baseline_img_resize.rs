@@ -17,7 +17,7 @@ use crate::classifiers::DistanceMetric;
 use crate::dataset::{
     AnalysisKind, build_per_roi_dataset, load_labels, enabled_rest_sources
 };
-use crate::eval::eval_knn_three_way_split;
+use crate::eval::{eval_knn_three_way_split, eval_rf_three_way_split};
 
 pub fn run(cfg: &AppConfig) -> Result<()> {
     let started = Instant::now();
@@ -62,14 +62,25 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             continue;
         }
         eval_knn_three_way_split(
-            xs,
-            ys,
+            xs.clone(),
+            ys.clone(),
             &groups,
             cfg.classification.knn_num_neighbors,
             metric,
             "baseline_resized",
             source,
             &cfg.resolved_classification_results_dir(),
+            &cfg.classification.pca_n_components,
+        )?;
+        eval_rf_three_way_split(
+            xs,
+            ys,
+            &groups,
+            cfg.classification.rf_n_trees,
+            "baseline_resized",
+            source,
+            &cfg.resolved_classification_results_dir(),
+            &cfg.classification.pca_n_components,
         )?;
     }
 
