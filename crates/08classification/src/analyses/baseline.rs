@@ -12,9 +12,9 @@ use utils::config::AppConfig;
 
 use crate::classifiers::DistanceMetric;
 use crate::dataset::{
-    AnalysisKind, FeatureSource, build_mean_dataset, build_per_roi_dataset, load_labels,
+    AnalysisKind, build_per_roi_dataset, load_labels, enabled_rest_sources
 };
-use crate::eval::eval_knn_three_way_split;
+use crate::eval::{eval_knn_three_way_split, eval_rf_three_way_split};
 
 pub fn run(cfg: &AppConfig) -> Result<()> {
     let started = Instant::now();
@@ -30,7 +30,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         .map_err(anyhow::Error::msg)
         .with_context(|| "invalid classification.knn_metric")?;
 
-    let mut labels = load_labels(&cfg.subject_filter_dir)?;
+    let mut labels = load_labels(&cfg.consolidated_data_dir)?;
     let subject_ids: HashSet<String> = fs::read_dir(&cfg.consolidated_data_dir)?
         .filter_map(|e| e.ok())
         .filter_map(|e| {
@@ -44,12 +44,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     labels.retain(|k, _| subject_ids.contains(k));
     info!(count = labels.len(), "valid subject labels loaded");
 
-    for source in [
-        FeatureSource::Ts,
-        FeatureSource::Cwt,
-        FeatureSource::Hht,
-        FeatureSource::HhtRoi,
-    ] {
+    for source in enabled_rest_sources(cfg) {
         let (xs, ys, groups) = build_per_roi_dataset(
             &cfg.consolidated_data_dir,
             &subject_ids,
@@ -68,49 +63,25 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             continue;
         }
         eval_knn_three_way_split(
-            xs,
-            ys,
+            xs.clone(),
+            ys.clone(),
             &groups,
             cfg.classification.knn_num_neighbors,
             metric,
             "baseline_chunked",
             source,
             &cfg.resolved_classification_results_dir(),
+            &cfg.classification.pca_n_components,
         )?;
-    }
-
-    for source in [
-        FeatureSource::Ts,
-        FeatureSource::Cwt,
-        FeatureSource::Hht,
-        FeatureSource::HhtRoi,
-    ] {
-        let (xs, ys, groups) = build_mean_dataset(
-            &cfg.consolidated_data_dir,
-            &subject_ids,
-            &labels,
-            source,
-            AnalysisKind::BaselineChunked,
-        )?;
-        info!(
-            source = ?source,
-            samples = xs.len(),
-            features = xs.first().map(|r| r.len()).unwrap_or(0),
-            "built baseline_chunked_mean dataset"
-        );
-        if xs.is_empty() {
-            debug!(source = ?source, "no samples, skipping");
-            continue;
-        }
-        eval_knn_three_way_split(
+        eval_rf_three_way_split(
             xs,
             ys,
             &groups,
-            cfg.classification.knn_num_neighbors,
-            metric,
-            "baseline_chunked_mean",
+            cfg.classification.rf_n_trees,
+            "baseline_chunked",
             source,
             &cfg.resolved_classification_results_dir(),
+            &cfg.classification.pca_n_components,
         )?;
     }
 

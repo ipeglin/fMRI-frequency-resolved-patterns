@@ -178,7 +178,7 @@ impl KNN {
             _ => (x, None),
         };
 
-        let mut classes: Vec<i32> = y.iter().copied().collect();
+        let mut classes: Vec<i32> = y.to_vec();
         classes.sort_unstable();
         classes.dedup();
 

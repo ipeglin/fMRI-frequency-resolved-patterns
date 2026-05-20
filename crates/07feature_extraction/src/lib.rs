@@ -29,7 +29,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         force = cfg.force,
         roi_selection_name = %cfg.roi_selection.name,
         image_fit = ?cfg.feature_extraction.image_fit,
-        hht_log_amp = cfg.feature_extraction.hht_log_amp,
+        hht_log_amp = cfg.hht.hht_log_amp,
         "starting CNN feature extraction pipeline"
     );
 
@@ -153,7 +153,6 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                 let ctx = AnalysisCtx {
                     extractor: &extractor,
                     fit: cfg.feature_extraction.image_fit,
-                    hht_log_amp: cfg.feature_extraction.hht_log_amp,
                     roi_indices: &roi_indices,
                     roi_index_tensor: &roi_index_tensor,
                     roi_labels_joined: &labels_joined,
@@ -163,6 +162,10 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                     force: cfg.force,
                     subject_id: formatted_id,
                     task_name,
+                    sampling_rate: cfg.task_sampling_rate,
+                    hht_smoothed: cfg.feature_extraction.hht_smoothed,
+                    hht_ie: cfg.feature_extraction.hht_ie,
+                    roi_stratified_decomposition: cfg.roi_selection.stratified_decomposition,
                 };
                 strategies::run_for_file(&ctx, &h5_file)
             })();

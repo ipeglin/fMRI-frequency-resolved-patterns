@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = { workspace = true }
 hdf5 = { workspace = true }
+hdf5-sys = { workspace = true }
 tracing = { workspace = true }
 tch = "0.24.0"
 rand = "0.8"

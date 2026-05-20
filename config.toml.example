@@ -8,13 +8,13 @@ tcp_annex_remote = "9cee7da3-a848-4b59-b8ff-d7848f2ad864" # Git annex remote
 
 # Directories
 tcp_repo_dir = ""
-csv_output_dir = ""
 fmriprep_output_dir = ""
 consolidated_data_dir = ""
 subject_filter_dir = ""
-task_regressors_output_dir = ""
-data_splitting_output_dir = ""
 classification_results_dir = ""
+# Root directory for diagnostic TSV dumps (BIDS-ish naming, sub-dirs per stage).
+# Only written when dump_intermediates = true.
+intermediates_output_dir = "out/intermediates"
 
 # Atlas Files
 cortical_atlas = ""
@@ -25,37 +25,61 @@ subcortical_atlas_lut = ""
 # Run params
 force = false
 dry_run = false
+# When true, a subject must have a task-restAP_run-01 file to qualify for
+# inclusion. When false (default), any task-restAP run is sufficient.
+restap_run01_only = false
+# Write per-stage diagnostic TSV files to intermediates_output_dir.
+# Enables plotting of mode PSDs, IF distributions, confounds etc. for
+# hyperparameter analysis (num_modes, alpha, tau). Default false.
+dump_intermediates = true
 
 [parcellation]
 voxelwise_zscore = false
 
-[mvmd]
-num_modes = 12
+[hht]
+num_modes = 10
+alpha = 1000.0          # MVMD penalty term (bandwidth constraint per mode)
+admm_tolerance = 1e-8   # ADMM convergence stopping criterion
+admm_tau = 1e-3         # ADMM dual ascent step size
+admm_max_iterations = 500 # ADMM iteration cap
+
+# Noise-Assisted MVMD (NA-MVMD) — more robust to choice of K, but slower per iter.
+# Outputs written to separate HDF5 groups (full_run_std_na / blocks_std_na) so
+# classic and NA results coexist on disk.
+# Follows the reference na_mvmd.m: per-channel unit-variance normalize, append WGN,
+# apply GCS single-snapshot centroid for omega update, rescale modes by original std.
+na_mvmd = false          # set true to enable NA-MVMD
+noise_channels = 1       # WGN channels appended (N); 1 is usually sufficient
+noise_std_ratio = 0.8    # noise std relative to unit-variance channels (matches reference 0.8)
+noise_seed = 13369326    # RNG seed for reproducible noise realizations
+frequency_init = "exponential" # omega init: zero | linear | exponential (log-spaced, recommended)
 
 [feature_extraction]
 cnn_weights_path = ""
+hht_smoothed = true  # produce frequency-smoothed HHT analyses (hht_smoothed / hht_roi_smoothed)
+hht_ie = true        # produce instantaneous energy analyses IE(t) = Σ_ω H²(ω,t) (hht_ie / hht_roi_ie)
 
 [classification]
-knn_num_neighbors = 3
+knn_num_neighbors = 11
 knn_metric = "cosine" # cosine | euclidean | mahalanobis | mahalanobis_diag
 
 # Single source of truth for which atlas rows the spec-dependent stages
-# (04mvmd `_roi`, 05hilbert `_roi`, 06fc `_roi`, 07feature_extraction)
-# operate on. Cortical regions match exactly against the Yeo region label
-# (e.g. "PFCm"). Cortical networks match exactly against the Yeo network
-# label (e.g. "LimbicA", "LimbicB", "DefaultA"); when both `cortical_regions`
-# and `cortical_networks` are set, the intersection is selected. An empty
-# list on either axis means "no constraint on that axis" — leaving
-# `cortical_networks` empty includes all networks for the listed regions,
-# while leaving `cortical_regions` empty includes all regions in the listed
-# networks. Subcortical regions match by substring against the Tian region
-# label (e.g. "AMY" catches both "lAMY" and "mAMY").
+# (07feature_extraction, 09fc_analysis) operate on.
 #
-# Example: limit to limbic cortical PFC + AMY subcortical:
-#   cortical_regions = ["PFCv", "PFCm"]
-#   cortical_networks = ["LimbicA", "LimbicB"]
-#   subcortical_regions = ["AMY"]
-[roi_selection]
+# Cortical regions match exactly against the Yeo region label (e.g. "PFCm").
+# Cortical networks match exactly against the Yeo network label (e.g. "LimbicA");
+# when both are set the intersection is selected. Subcortical regions match by
+# substring against the Tian region label (e.g. "AMY" catches "lAMY"/"mAMY").
+#
+# Each entry can optionally pin a hemisphere:
+#   cortical_regions = ["PFCv", { region = "PFCm", hemisphere = "LH" }]
+# Bare strings select both hemispheres. hemisphere = "LH" | "RH".
+#
+# stratified_decomposition (default false): when true, stage 04 runs a separate
+# MVMD pass on the ROI-subset rows and writes `_roi` HDF5 groups. When false
+# (default), only the full-signal multi-channel decomp is run and ROIs are
+# extracted post-hoc from the derived modes - cheaper and consistent with the
+# full-channel MVMD decomposition.[roi_selection]
 name = "vpfc_mpfc_amy"
 cortical_regions = ["PFCv", "PFCm"]
 cortical_networks = []

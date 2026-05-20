@@ -1,19 +1,27 @@
 [package]
- name = "hilbert"
+name = "hht"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+regex = { workspace = true }
 anyhow = { workspace = true }
-fastcwt = "0.1.9"
-scirs2-signal = "0.4.1"
 hdf5 = { workspace = true }
 ndarray = { workspace = true }
-num-complex = "0.4"
-
+polars = { workspace = true }
+polars-io = { workspace = true }
+rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+rustfft = { workspace = true }
+fastcwt = "0.1.9"
+scirs2-signal = "0.4.1"
+num-complex = "0.4"
+
+rand = "0.8"
+rand_chacha = "0.3"
+rand_distr = "0.4"
 
 utils = { path = "../utils" }

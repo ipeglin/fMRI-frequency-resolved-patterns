@@ -26,8 +26,8 @@ tcp_subject_selection = { path = "../00tcp_subject_selection" }
 fmri_parcellation = { path = "../01fmri_parcellation" }
 fmri_segment_trials = { path = "../02fmri_segment_trials" }
 cwt = { path = "../03cwt" }
-mvmd = { path = "../04mvmd" }
+hht = { path = "../04hht" }
 fc = { path = "../06fc" }
-hilbert = { path = "../05hilbert" }
 feature_extraction = { path = "../07feature_extraction", optional = true }
 classification = { path = "../08classification" }
+fc_analysis = { path = "../09fc_analysis" }

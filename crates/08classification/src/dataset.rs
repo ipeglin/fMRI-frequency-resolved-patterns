@@ -24,6 +24,7 @@ fn scrub_row_inplace(row: &mut [f32]) -> usize {
 
 use utils::bids_filename::BidsFilename;
 pub use utils::bids_subject_id::BidsSubjectId;
+use utils::config::AppConfig;
 use utils::hdf5_io;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,7 +32,9 @@ pub enum FeatureSource {
     Ts,
     Cwt,
     Hht,
-    HhtRoi,
+    HhtRoiStratified,
+    HhtSmoothed,
+    HhtRoiStratifiedSmoothed,
 }
 
 impl FeatureSource {
@@ -40,7 +43,9 @@ impl FeatureSource {
             Self::Ts => "ts",
             Self::Cwt => "cwt",
             Self::Hht => "hht",
-            Self::HhtRoi => "hht_roi",
+            Self::HhtRoiStratified => "hht_roi_stratified",
+            Self::HhtSmoothed => "hht_smoothed",
+            Self::HhtRoiStratifiedSmoothed => "hht_roi_stratified_smoothed",
         }
     }
 }
@@ -51,10 +56,44 @@ impl std::str::FromStr for FeatureSource {
         match s {
             "cwt" => Ok(Self::Cwt),
             "hht" => Ok(Self::Hht),
-            "hht_roi" => Ok(Self::HhtRoi),
+            "hht_roi_stratified" => Ok(Self::HhtRoiStratified),
+            "hht_smoothed" => Ok(Self::HhtSmoothed),
+            "hht_roi_stratified_smoothed" => Ok(Self::HhtRoiStratifiedSmoothed),
             _ => Err(format!("unknown FeatureSource: {}", s)),
         }
     }
+}
+
+/// Returns the `FeatureSource` variants to run for restAP analyses, based on
+/// whether ROI-stratified decomposition was performed. When
+/// `stratified_decomposition` is `false`, the `HhtRoiStratified*` sources are
+/// omitted — no `_roi` HDF5 groups exist on disk.
+pub fn enabled_rest_sources(cfg: &AppConfig) -> Vec<FeatureSource> {
+    let mut v = vec![
+        FeatureSource::Ts,
+        FeatureSource::Cwt,
+        FeatureSource::Hht,
+        FeatureSource::HhtSmoothed,
+    ];
+    if cfg.roi_selection.stratified_decomposition {
+        v.push(FeatureSource::HhtRoiStratified);
+        v.push(FeatureSource::HhtRoiStratifiedSmoothed);
+    }
+    v
+}
+
+/// Returns the `FeatureSource` variants to run for hammerAP analyses.
+pub fn enabled_hammer_sources(cfg: &AppConfig) -> Vec<FeatureSource> {
+    let mut v = vec![
+        FeatureSource::Cwt,
+        FeatureSource::Hht,
+        FeatureSource::HhtSmoothed,
+    ];
+    if cfg.roi_selection.stratified_decomposition {
+        v.push(FeatureSource::HhtRoiStratified);
+        v.push(FeatureSource::HhtRoiStratifiedSmoothed);
+    }
+    v
 }
 
 /// One of the five DenseNet feature extraction strategies emitted by
@@ -139,23 +178,51 @@ pub fn load_subject_ids(csv: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Load `subjectkey -> Label` from `controls.csv` and `anhedonic.csv`.
-pub fn load_labels(dir: &Path) -> Result<HashMap<String, Label>> {
+/// Load `subjectkey -> Label` by reading the `/metadata/cohort` attribute from
+/// each subject's HDF5 file in `consolidated_data_dir`.
+///
+/// Subjects without a `cohort` attribute (e.g. files produced before the IO
+/// refactor) are silently skipped so pre-existing H5 files do not break
+/// classification runs.
+pub fn load_labels(consolidated_data_dir: &Path) -> Result<HashMap<String, Label>> {
     let mut map = HashMap::new();
-    for (filename, label) in [
-        ("controls.csv", Label::Control),
-        ("anhedonic.csv", Label::Anhedonic),
-    ] {
-        let path = dir.join(filename);
-        if !path.exists() {
-            eprintln!("Warning: expected file not found: {:?}", path);
+    let Ok(entries) = std::fs::read_dir(consolidated_data_dir) else {
+        return Ok(map);
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let subject_dir = entry.path();
+        if !subject_dir.is_dir() {
             continue;
         }
-        let df = utils::polars_csv::read_dataframe(&path)?;
-        let col = df.column("subjectkey")?.str()?;
-        for s in col.into_no_null_iter() {
-            map.insert(BidsSubjectId::parse(s).to_dir_name(), label);
-        }
+        let subject = BidsSubjectId::parse(
+            subject_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(""),
+        )
+        .to_dir_name();
+        let h5_files = list_subject_h5(&subject_dir)?;
+        let Some(h5_path) = h5_files.first() else {
+            continue;
+        };
+        let Ok(file) = hdf5::File::open(h5_path) else {
+            continue;
+        };
+        let Ok(meta) = file.group("metadata") else {
+            continue;
+        };
+        let Ok(attr) = meta.attr("cohort") else {
+            continue;
+        };
+        let Ok(cohort) = attr.read_scalar::<hdf5::types::VarLenUnicode>() else {
+            continue;
+        };
+        let label = match cohort.as_str() {
+            "control" => Label::Control,
+            "anhedonic" => Label::Anhedonic,
+            _ => continue,
+        };
+        map.insert(subject, label);
     }
     Ok(map)
 }
@@ -254,31 +321,6 @@ pub fn read_per_roi(
     Ok(rows)
 }
 
-/// Read the `mean [feat_dim]` vector from a leaf.
-pub fn read_mean(
-    h5_path: &Path,
-    source: FeatureSource,
-    kind: AnalysisKind,
-    leaf: &str,
-) -> Result<Vec<f32>> {
-    let group_path = leaf_group_path(source, kind, leaf);
-    let file = hdf5::File::open(h5_path)
-        .with_context(|| format!("failed to open {}", h5_path.display()))?;
-    let group = file
-        .group(&group_path)
-        .with_context(|| format!("missing group {} in {}", group_path, h5_path.display()))?;
-    let (data, shape, _): (Vec<f32>, _, _) = hdf5_io::read_dataset(&group, "mean")?;
-    if shape.len() != 1 {
-        bail!(
-            "unexpected mean shape {:?} in {}/{}",
-            shape,
-            h5_path.display(),
-            group_path
-        );
-    }
-    Ok(data)
-}
-
 // ---------------------------------------------------------------------------
 // Dataset builders
 // ---------------------------------------------------------------------------
@@ -289,6 +331,7 @@ pub fn read_mean(
 /// is the subject id for each row — useful for subject-stratified or
 /// group-aware splits. Files whose BIDS task does not match `kind.task()` are
 /// skipped automatically.
+#[allow(clippy::type_complexity)]
 pub fn build_per_roi_dataset<I, S>(
     consolidated_data_dir: &Path,
     subject_ids: I,
@@ -378,98 +421,13 @@ where
     Ok((xs, ys, groups))
 }
 
-/// Build a flat mean-vector dataset for a given (source, analysis) pair.
-///
-/// One row per (file × leaf). Returns `(xs, ys, groups)` where `groups` is
-/// `subject` for single-leaf analyses or `subject_<leaf>` for multi-leaf ones.
-/// The `roi` column in downstream CSV output will be empty (no `_roiNNN` suffix).
-pub fn build_mean_dataset<I, S>(
-    consolidated_data_dir: &Path,
-    subject_ids: I,
-    labels: &HashMap<String, Label>,
-    source: FeatureSource,
-    kind: AnalysisKind,
-) -> Result<(Vec<Vec<f32>>, Vec<Label>, Vec<String>)>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<str>,
-{
-    let mut xs = Vec::new();
-    let mut ys = Vec::new();
-    let mut groups = Vec::new();
-    let task = kind.task();
-    let mut total_cells_scrubbed: usize = 0;
-    let mut rows_with_nonfinite: usize = 0;
-    let mut subjects_with_nonfinite: BTreeSet<String> = BTreeSet::new();
-
-    for subject in subject_ids {
-        let subject = subject.as_ref().to_string();
-        let Some(&label) = labels.get(&subject) else {
-            debug!(subject, "missing label, skipping");
-            continue;
-        };
-        let dir = consolidated_data_dir.join(&subject);
-        if !dir.is_dir() {
-            continue;
-        }
-        let files = list_subject_h5(&dir)?;
-        for file in files {
-            let bids = BidsFilename::from_path_buf(&file);
-            if bids.get("task") != Some(task) {
-                continue;
-            }
-            for leaf in list_analysis_leaves(&file, source, kind) {
-                match read_mean(&file, source, kind, &leaf) {
-                    Ok(mut row) => {
-                        let fixed = scrub_row_inplace(&mut row);
-                        if fixed > 0 {
-                            total_cells_scrubbed += fixed;
-                            rows_with_nonfinite += 1;
-                            subjects_with_nonfinite.insert(subject.clone());
-                        }
-                        xs.push(row);
-                        ys.push(label);
-                        let mut g = subject.clone();
-                        if !leaf.is_empty() {
-                            g.push_str(&format!("_{}", leaf));
-                        }
-                        groups.push(g);
-                    }
-                    Err(e) => {
-                        debug!(
-                            file = %file.display(),
-                            leaf,
-                            error = %e,
-                            "failed to read mean"
-                        );
-                    }
-                }
-            }
-        }
-    }
-    if total_cells_scrubbed > 0 {
-        let total_cells = xs.iter().map(|r| r.len()).sum::<usize>().max(1);
-        warn!(
-            source = ?source,
-            kind = kind.dir(),
-            cells_scrubbed = total_cells_scrubbed,
-            cells_total = total_cells,
-            fraction = format!("{:.5}", total_cells_scrubbed as f64 / total_cells as f64),
-            rows_with_nonfinite = rows_with_nonfinite,
-            n_subjects = subjects_with_nonfinite.len(),
-            subjects = ?subjects_with_nonfinite.iter().take(10).collect::<Vec<_>>(),
-            "scrubbed non-finite feature cells in mean vectors (replaced with 0)."
-        );
-    }
-    Ok((xs, ys, groups))
-}
-
 /// Build a per-leaf grouping for analyses that emit multiple leaves per file
 /// (`BaselineChunked`, `TaskPerBlock`).
 ///
 /// Returns `leaf_name -> (xs, ys, subject_ids)`. Each row is one ROI of one
 /// (subject, file, leaf) combination. Used by ensemble classifiers that fit
 /// one model per chunk/block and combine predictions across leaves.
+#[allow(clippy::type_complexity)]
 pub fn build_per_leaf_per_roi_dataset<I, S>(
     consolidated_data_dir: &Path,
     subject_ids: I,

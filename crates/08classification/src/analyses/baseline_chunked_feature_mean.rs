@@ -12,8 +12,9 @@ use utils::bids_subject_id::BidsSubjectId;
 use utils::config::AppConfig;
 
 use crate::classifiers::DistanceMetric;
-use crate::dataset::{AnalysisKind, FeatureSource, build_per_roi_dataset, load_labels};
-use crate::eval::eval_knn_three_way_split;
+use crate::dataset::{AnalysisKind, build_per_roi_dataset, load_labels, enabled_rest_sources
+};
+use crate::eval::{eval_knn_three_way_split, eval_rf_three_way_split};
 
 pub fn run(cfg: &AppConfig) -> Result<()> {
     let started = Instant::now();
@@ -26,7 +27,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         .map_err(anyhow::Error::msg)
         .with_context(|| "invalid classification.knn_metric")?;
 
-    let mut labels = load_labels(&cfg.subject_filter_dir)?;
+    let mut labels = load_labels(&cfg.consolidated_data_dir)?;
     let subject_ids: HashSet<String> = fs::read_dir(&cfg.consolidated_data_dir)?
         .filter_map(|e| e.ok())
         .filter_map(|e| {
@@ -39,12 +40,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         .collect();
     labels.retain(|k, _| subject_ids.contains(k));
 
-    for source in [
-        FeatureSource::Ts,
-        FeatureSource::Cwt,
-        FeatureSource::Hht,
-        FeatureSource::HhtRoi,
-    ] {
+    for source in enabled_rest_sources(cfg) {
         let (xs, ys, groups) = build_per_roi_dataset(
             &cfg.consolidated_data_dir,
             &subject_ids,
@@ -63,14 +59,25 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             continue;
         }
         eval_knn_three_way_split(
-            xs,
-            ys,
+            xs.clone(),
+            ys.clone(),
             &groups,
             cfg.classification.knn_num_neighbors,
             metric,
             "baseline_chunked_feature_mean",
             source,
             &cfg.resolved_classification_results_dir(),
+            &cfg.classification.pca_n_components,
+        )?;
+        eval_rf_three_way_split(
+            xs,
+            ys,
+            &groups,
+            cfg.classification.rf_n_trees,
+            "baseline_chunked_feature_mean",
+            source,
+            &cfg.resolved_classification_results_dir(),
+            &cfg.classification.pca_n_components,
         )?;
     }
 

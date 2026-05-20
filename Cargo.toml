@@ -7,16 +7,17 @@ members = [
   "crates/01fmri_parcellation",
   "crates/02fmri_segment_trials",
   "crates/03cwt",
-  "crates/04mvmd",
-  "crates/05hilbert",
+  "crates/04hht",
   "crates/06fc",
   "crates/07feature_extraction",
   "crates/08classification",
+  "crates/09fc_analysis",
 ]
 
 [workspace.dependencies]
 anyhow = "1"
 hdf5 = "0.8"
+hdf5-sys = "0.8"
 ndarray = { version = "0.15.6", features = ["rayon"] }
 nifti = { version = "0.17.0", features = ["ndarray_volumes", "ndarray"] }
 polars  = { version = "0.52.0", features = ["csv", "lazy", "regex", "timezones", "strings", "dtype-full", "round_series", "trigonometry", "polars-ops", "cum_agg"] }
@@ -30,3 +31,7 @@ thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 toml = "0.8"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1

@@ -46,7 +46,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         .collect();
     let mut subject_ids_vec: Vec<String> = subject_ids.into_iter().collect();
     subject_ids_vec.sort();
-    let labels = load_labels(&cfg.subject_filter_dir)?;
+    let labels = load_labels(&cfg.consolidated_data_dir)?;
 
     let mut controls = Vec::new();
     let mut anhedonics = Vec::new();
@@ -62,7 +62,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
     let test_set: HashSet<String> = test_s.into_iter().collect();
     let val_set: HashSet<String> = val_s.into_iter().collect();
 
-    for source in [FeatureSource::Cwt, FeatureSource::Hht] {
+    for source in [FeatureSource::Cwt, FeatureSource::Hht, FeatureSource::HhtSmoothed] {
         let (xs, ys, groups) = build_per_roi_dataset(
             &cfg.consolidated_data_dir,
             &subject_ids_vec,

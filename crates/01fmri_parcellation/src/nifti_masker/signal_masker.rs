@@ -5,6 +5,7 @@ use ndarray::{Array2, Array4, Axis};
 ///
 /// Based on nilearn's standardization options for NiftiLabelsMasker.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[allow(dead_code)]
 pub enum Standardize {
     /// No standardization
     #[default]
@@ -47,6 +48,7 @@ impl Default for MaskerSignalConfig {
     }
 }
 
+#[allow(dead_code)]
 impl MaskerSignalConfig {
     /// Create a preprocessing config with detrending and z-score standardization.
     /// This matches nilearn's default behavior.

@@ -6,10 +6,11 @@
 //!      `[-2.1, +2.6]`.
 //!
 //! Pipeline per spectrogram (`[F, T]`, F=224 frequency bins):
-//!   raw → optional `log1p` (HHT) → per-image min-max → `[0, 1]` →
-//!   fit to `224×224` (zero-pad time axis or bicubic resize, per config) →
-//!   replicate channel to `[3, 224, 224]` → ImageNet normalize →
-//!   `[1, 3, 224, 224]`.
+//!   pre_normalized=true  → `[0, 1]` (from producer) → fit → replicate channel → ImageNet normalize
+//!   pre_normalized=false → per-image min-max → `[0, 1]` → fit → replicate channel → ImageNet normalize
+//!
+//! CWT and HHT are pre-normalized at producer time (crates 03cwt / 05hilbert).
+//! Raw timeseries (Ts) still requires consumer-side min-max.
 
 use tch::{Kind, Tensor};
 use tracing::debug;
@@ -23,31 +24,26 @@ const IMAGENET_STD: [f32; 3] = [0.229, 0.224, 0.225];
 /// Convert one grayscale spectrogram `[F, T]` to a DenseNet-ready tensor
 /// `[1, 3, 224, 224]`.
 ///
-/// `log_amp` applies `log1p` before normalization to compress the heavy tail
-/// of Hilbert-Huang spectra so low-amplitude bins keep their granularity in
-/// the [0, 1] range. `fit` controls how a non-`224x224` spectrogram is coerced
-/// to the DenseNet input size.
-pub fn spectrum_to_image(spec: &Tensor, log_amp: bool, fit: ImageFitMode) -> Tensor {
-    let s = if log_amp {
-        // Bicubic resizing of narrow-time HHT blocks (T ~ 23 → 224) introduces
-        // small negative ringing artefacts. `log1p(x)` returns NaN for `x ≤ -1`,
-        // and any NaN here propagates to `.min()`/`.max()` and through the rest
-        // of the DenseNet input, yielding 100% NaN feature vectors. Power
-        // spectra are physically `≥ 0`, so clamp to 0 before log1p.
-        spec.clamp_min(0.0).log1p()
-    } else {
+/// `pre_normalized` signals that the spectrogram is already in `[0, 1]`
+/// (normalized by the producer crate) and the consumer-side min-max step
+/// should be skipped. Pass `false` for raw sources (e.g. Ts) that still
+/// need per-image normalization here. `fit` controls how a non-`224×224`
+/// spectrogram is coerced to the DenseNet input size.
+pub fn spectrum_to_image(spec: &Tensor, pre_normalized: bool, fit: ImageFitMode) -> Tensor {
+    let normalised = if pre_normalized {
         spec.shallow_clone()
+    } else {
+        let min = spec.min();
+        let max = spec.max();
+        (spec - &min) / (&max - &min + 1e-8)
     };
-    let min = s.min();
-    let max = s.max();
-    let normalised = (&s - &min) / (&max - &min + 1e-8);
 
     let img = normalised.unsqueeze(0).unsqueeze(0);
     let img = match fit {
-        ImageFitMode::Resize => img.upsample_bicubic2d(&[TARGET_H, TARGET_W], false, None, None),
+        ImageFitMode::Resize => img.upsample_bicubic2d([TARGET_H, TARGET_W], false, None, None),
         ImageFitMode::Pad => pad_to(&img, TARGET_H, TARGET_W),
     };
-    let img = img.expand(&[1, 3, TARGET_H, TARGET_W], false).contiguous();
+    let img = img.expand([1, 3, TARGET_H, TARGET_W], false).contiguous();
 
     let device = img.device();
     let mean = Tensor::from_slice(&IMAGENET_MEAN)
@@ -64,10 +60,14 @@ pub fn spectrum_to_image(spec: &Tensor, log_amp: bool, fit: ImageFitMode) -> Ten
 /// Stack per-ROI spectrograms into a single DenseNet input batch.
 ///
 /// Input  `[n_rois, F, T]`. Output `[n_rois, 3, 224, 224]`.
-pub fn batch_spectrum_to_input(rois_spec: &Tensor, log_amp: bool, fit: ImageFitMode) -> Tensor {
+pub fn batch_spectrum_to_input(
+    rois_spec: &Tensor,
+    pre_normalized: bool,
+    fit: ImageFitMode,
+) -> Tensor {
     let n = rois_spec.size()[0];
     let images: Vec<Tensor> = (0..n)
-        .map(|i| spectrum_to_image(&rois_spec.select(0, i), log_amp, fit))
+        .map(|i| spectrum_to_image(&rois_spec.select(0, i), pre_normalized, fit))
         .collect();
     Tensor::cat(&images, 0)
 }
@@ -84,7 +84,7 @@ fn pad_to(img: &Tensor, target_h: i64, target_w: i64) -> Tensor {
         return img.shallow_clone();
     }
     // `Tensor::pad` order is (left, right, top, bottom).
-    img.pad(&[0, pad_w, 0, pad_h], "constant", Some(0.0))
+    img.pad([0, pad_w, 0, pad_h], "constant", Some(0.0))
 }
 
 /// Trim time axis to `n_chunks * (T / n_chunks)` and split into equal-width chunks.
@@ -138,7 +138,7 @@ pub fn trim_and_mean_blocks(blocks: &[Tensor], target_w: i64) -> Tensor {
 /// to bring face blocks to a common 224×224 footprint before stack-mean.
 pub fn resize_along_freq_time(spec: &Tensor, target_h: i64, target_w: i64) -> Tensor {
     spec.unsqueeze(1)
-        .upsample_bicubic2d(&[target_h, target_w], false, None, None)
+        .upsample_bicubic2d([target_h, target_w], false, None, None)
         .squeeze_dim(1)
 }
 
@@ -165,7 +165,7 @@ pub fn quantize_2d_tensor(input: &Tensor, num_bins: i64, per_channel: bool) -> T
     );
 
     let (min, max) = if per_channel && ndims > 1 {
-        (input.amin(&[-1], true), input.amax(&[-1], true))
+        (input.amin([-1], true), input.amax([-1], true))
     } else {
         (input.min(), input.max())
     };

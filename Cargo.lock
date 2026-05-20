@@ -504,8 +504,10 @@ dependencies = [
  "polars-io",
  "rand 0.8.5",
  "rand_chacha 0.3.1",
+ "rand_distr 0.4.3",
  "serde",
  "serde_json",
+ "smartcore",
  "tracing",
  "utils",
 ]
@@ -519,11 +521,11 @@ dependencies = [
  "classification",
  "cwt",
  "fc",
+ "fc_analysis",
  "feature_extraction",
  "fmri_parcellation",
  "fmri_segment_trials",
- "hilbert",
- "mvmd",
+ "hht",
  "polars",
  "serde",
  "serde_json",
@@ -886,11 +888,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "fc_analysis"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hdf5",
+ "ndarray 0.15.6",
+ "rand 0.8.5",
+ "rand_chacha 0.3.1",
+ "rayon",
+ "tracing",
+ "utils",
+]
+
+[[package]]
 name = "feature_extraction"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "hdf5",
+ "hdf5-sys",
  "rand 0.8.5",
  "rand_chacha 0.3.1",
  "tch",
@@ -1303,7 +1320,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
-name = "hilbert"
+name = "hht"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1311,6 +1328,14 @@ dependencies = [
  "hdf5",
  "ndarray 0.15.6",
  "num-complex",
+ "polars",
+ "polars-io",
+ "rand 0.8.5",
+ "rand_chacha 0.3.1",
+ "rand_distr 0.4.3",
+ "rayon",
+ "regex",
+ "rustfft",
  "scirs2-signal",
  "serde",
  "serde_json",
@@ -1852,25 +1877,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mvmd"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "hdf5",
- "ndarray 0.15.6",
- "polars",
- "polars-io",
- "rayon",
- "regex",
- "rustfft",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tracing",
- "utils",
-]
-
-[[package]]
 name = "nalgebra"
 version = "0.33.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2002,6 +2008,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "num"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "35bd024e8b2ff75562e5f34e7f4905839deb4b22955ef5e73d2fea1b9813cb23"
+dependencies = [
+ "num-bigint",
+ "num-complex",
+ "num-integer",
+ "num-iter",
+ "num-rational",
+ "num-traits",
+]
+
+[[package]]
 name = "num-bigint"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2044,6 +2064,17 @@ version = "0.1.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7969661fd2958a5cb096e56c8e1ad0444ac2bbcd0061bd28660485a44879858f"
 dependencies = [
+ "num-traits",
+]
+
+[[package]]
+name = "num-iter"
+version = "0.1.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1429034a0490724d0075ebb2bc9e875d6503c3cf69e235a8941aa757d83ef5bf"
+dependencies = [
+ "autocfg",
+ "num-integer",
  "num-traits",
 ]
 
@@ -2156,6 +2187,15 @@ dependencies = [
  "libc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "ordered-float"
+version = "5.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7d950ca161dc355eaf28f82b11345ed76c6e1f6eb1f4f4479e0323b9e2fbd0e"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]
@@ -3137,9 +3177,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc266eb313df6c5c09c1c7b1fbe2510961e5bcd3add930c1e31f7ed9da0feff8"
+checksum = "d2e8e8bcc7961af1fdac401278c6a831614941f6164ee3bf4ce61b7edb162207"
 dependencies = [
  "chacha20",
  "getrandom 0.4.2",
@@ -3227,7 +3267,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d431c2703ccf129de4d45253c03f49ebb22b97d6ad79ee3ecfc7e3f4862c1d8"
 dependencies = [
  "num-traits",
- "rand 0.10.0",
+ "rand 0.10.1",
 ]
 
 [[package]]
@@ -3599,7 +3639,7 @@ dependencies = [
  "oxiblas-lapack",
  "oxiblas-ndarray",
  "parking_lot 0.12.5",
- "rand 0.10.0",
+ "rand 0.10.1",
  "rand_chacha 0.10.0",
  "rand_distr 0.6.0",
  "rayon",
@@ -3917,6 +3957,20 @@ name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
+
+[[package]]
+name = "smartcore"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92d6270025c1e0ab2a9aa107d757805540b3f7dcb502347ab7b87b5f65573159"
+dependencies = [
+ "approx",
+ "cfg-if",
+ "num",
+ "num-traits",
+ "ordered-float",
+ "rand 0.10.1",
+]
 
 [[package]]
 name = "socket2"

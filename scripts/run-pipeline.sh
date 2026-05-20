@@ -6,8 +6,7 @@
 # 01. parcellate-bold
 # 02. segment-trials
 # 03. cwt
-# 04. decompose-mvmd
-# 05. hht
+# 04. hht
 # 06. fc
 # 07. feature-extraction
 # 08. split-data
@@ -45,13 +44,13 @@ if [ -n "$LIBTORCH" ]; then
 fi
 
 # --- Build Project ---
-log_step "Building the project (cargo build --release --all-features)"
+log_step "Checking build the project (cargo check --release --all-features)"
 cd "$PROJECT_ROOT"
-if ! cargo build --release --all-features; then
-    log_err "Failed to build the project. Aborting pipeline."
+if ! cargo check --release --all-features; then
+    log_err "Failed check of the project. Aborting pipeline."
     exit 1
 fi
-log_success "Build complete."
+log_success "Check complete."
 
 # --- Pipeline Execution ---
 # Using cargo run handles the dynamic library paths (DYLD_LIBRARY_PATH/LD_LIBRARY_PATH)
@@ -80,10 +79,10 @@ run_stage "00" "select-subjects"
 run_stage "01" "parcellate-bold"
 run_stage "02" "segment-trials"
 run_stage "03" "cwt"
-run_stage "04" "mvmd"
-run_stage "05" "hht"
+run_stage "04" "hht"
 run_stage "06" "fc"
 run_stage "07" "feature-extraction"
 run_stage "08" "classify"
+run_stage "09" "fc-analysis"
 
 log_title "Pipeline Execution Finished Successfully"
