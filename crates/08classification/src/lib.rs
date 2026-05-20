@@ -5,6 +5,7 @@ pub mod dataset;
 pub mod eval;
 pub mod metrics;
 pub mod normalizer;
+pub mod pca;
 pub mod splits;
 
 use crate::analyses::{

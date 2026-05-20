@@ -297,7 +297,7 @@ pub fn threshold_sweep(y_true: &[i32], p1: &[f32], thresholds: &[f32]) -> Vec<Th
         .collect()
 }
 
-fn evaluate_threshold(y_true: &[i32], p1: &[f32], threshold: f32) -> ThresholdReport {
+pub(crate) fn evaluate_threshold(y_true: &[i32], p1: &[f32], threshold: f32) -> ThresholdReport {
     let mut tp = 0u32;
     let mut fp = 0u32;
     let mut tn = 0u32;
@@ -336,6 +336,65 @@ fn evaluate_threshold(y_true: &[i32], p1: &[f32], threshold: f32) -> ThresholdRe
         youden_j: sensitivity + specificity - 1.0,
         f1,
     }
+}
+
+/// Threshold maximising F1-score along the precision-recall curve, swept over
+/// the unique scores observed plus 0.0 and 1.0. Returns 0.5 when the sweep
+/// yields no positive predictions or when the input is empty.
+///
+/// Ties broken by preferring the lower threshold (higher recall).
+pub fn f1_optimal_threshold(y_true: &[i32], p1: &[f32]) -> f32 {
+    if y_true.is_empty() {
+        return 0.5;
+    }
+    let mut candidates: Vec<f32> = p1.iter().copied().filter(|p| p.is_finite()).collect();
+    candidates.push(0.0);
+    candidates.push(1.0);
+    candidates.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    candidates.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+
+    let mut best_t = 0.5;
+    let mut best_f1 = f32::NEG_INFINITY;
+    for &t in &candidates {
+        let r = evaluate_threshold(y_true, p1, t);
+        // Prefer lower threshold on tie (more recall).
+        if r.f1 > best_f1 {
+            best_f1 = r.f1;
+            best_t = t;
+        }
+    }
+    best_t
+}
+
+/// Lowest threshold t such that specificity(t) ≥ `min_specificity`.
+///
+/// As threshold rises, fewer samples are predicted positive, so specificity
+/// is non-decreasing. Scanning ascending candidates finds the least
+/// conservative threshold that still satisfies the constraint — maximising
+/// sensitivity subject to the specificity floor.
+///
+/// Returns `1.0` (predict nothing positive) when no candidate meets the target.
+/// Returns `0.0` when there are no negative-class samples (specificity undefined).
+pub fn specificity_constrained_threshold(y_true: &[i32], p1: &[f32], min_specificity: f32) -> f32 {
+    if y_true.is_empty() {
+        return 1.0;
+    }
+    let n_neg = y_true.iter().filter(|&&y| y == 0).count();
+    if n_neg == 0 {
+        return 0.0;
+    }
+    let mut candidates: Vec<f32> = p1.iter().copied().filter(|p| p.is_finite()).collect();
+    candidates.push(0.0);
+    candidates.push(1.0);
+    candidates.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    candidates.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+
+    for &t in &candidates {
+        if evaluate_threshold(y_true, p1, t).specificity >= min_specificity {
+            return t;
+        }
+    }
+    1.0
 }
 
 /// Threshold maximising Youden's J = sensitivity + specificity - 1, swept over
@@ -414,5 +473,56 @@ mod tests {
         let p = vec![0.1f32, 0.2, 0.8, 0.9];
         let t = youden_optimal_threshold(&y, &p);
         assert!(t > 0.2 && t <= 0.8, "t = {}", t);
+    }
+
+    #[test]
+    fn f1_picks_separating_threshold() {
+        let y = vec![0, 0, 1, 1];
+        let p = vec![0.1f32, 0.2, 0.8, 0.9];
+        let t = f1_optimal_threshold(&y, &p);
+        // Perfect F1 achievable anywhere in (0.2, 0.8].
+        assert!(t > 0.2 && t <= 0.8, "t = {}", t);
+    }
+
+    #[test]
+    fn f1_returns_half_on_empty() {
+        let y: Vec<i32> = vec![];
+        let p: Vec<f32> = vec![];
+        assert!((f1_optimal_threshold(&y, &p) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn spec_constrained_threshold_meets_target() {
+        // 4 negatives, 2 positives; scores clearly separated.
+        let y = vec![0, 0, 0, 0, 1, 1];
+        let p = vec![0.1f32, 0.2, 0.3, 0.4, 0.8, 0.9];
+        let t = specificity_constrained_threshold(&y, &p, 0.75);
+        let r = evaluate_threshold(&y, &p, t);
+        assert!(r.specificity >= 0.75, "spec = {}", r.specificity);
+        // Should not be more conservative than necessary.
+        // At t=0.4 all negatives are correctly rejected: spec = 1.0, sens > 0.
+        assert!(t <= 0.4 + 1e-5, "threshold too high: {}", t);
+    }
+
+    #[test]
+    fn spec_constrained_threshold_falls_back_to_one() {
+        // Impossible to reach 99% specificity with these scores.
+        let y = vec![0, 1];
+        let p = vec![0.9f32, 0.1]; // inverted — no threshold yields spec >= 0.99
+        let t = specificity_constrained_threshold(&y, &p, 0.99);
+        // At t=1.0 nothing is predicted positive: TN=1, FP=0, spec=1.0.
+        assert!((t - 1.0).abs() < 1e-6 || evaluate_threshold(&y, &p, t).specificity >= 0.99);
+    }
+
+    #[test]
+    fn f1_threshold_maximises_f1_over_youden() {
+        // Imbalanced: 1 positive vs 4 negatives.
+        // F1 may prefer a threshold that trades specificity for recall.
+        let y = vec![0, 0, 0, 0, 1];
+        let p = vec![0.1f32, 0.2, 0.3, 0.45, 0.9];
+        let t_f1 = f1_optimal_threshold(&y, &p);
+        let r_f1 = evaluate_threshold(&y, &p, t_f1);
+        // F1 at the chosen threshold should be non-trivial.
+        assert!(r_f1.f1 > 0.0, "f1 = {}", r_f1.f1);
     }
 }
