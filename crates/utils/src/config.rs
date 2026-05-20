@@ -420,10 +420,22 @@ pub struct ClassificationParams {
     pub knn_num_neighbors: usize,
     #[serde(default = "default_knn_metric")]
     pub knn_metric: String,
+    /// PCA dimensionalities to sweep alongside the full-vector run.
+    /// Each value produces a parallel set of results under `pca_{k}/`.
+    /// Empty list (default) skips PCA entirely.
+    #[serde(default)]
+    pub pca_n_components: Vec<usize>,
+    /// Number of trees in the random forest ensemble. Default 100.
+    #[serde(default = "default_rf_n_trees")]
+    pub rf_n_trees: usize,
 }
 
 fn default_knn_metric() -> String {
     "cosine".to_string()
+}
+
+fn default_rf_n_trees() -> usize {
+    100
 }
 
 impl Default for ClassificationParams {
@@ -431,6 +443,8 @@ impl Default for ClassificationParams {
         Self {
             knn_num_neighbors: 3,
             knn_metric: default_knn_metric(),
+            pca_n_components: Vec::new(),
+            rf_n_trees: default_rf_n_trees(),
         }
     }
 }
