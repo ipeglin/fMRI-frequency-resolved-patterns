@@ -6,6 +6,70 @@
 
 use serde::Serialize;
 
+/// Bootstrap confidence interval for a scalar statistic.
+#[derive(Debug, Serialize)]
+pub struct BootstrapCi {
+    pub point: f32,
+    pub lo_95: f32,
+    pub hi_95: f32,
+}
+
+/// Compute a bootstrap 95% CI for `statistic(y_true, scores)`.
+///
+/// Skips resamples that lack both classes (can't compute rank-based stats).
+pub fn bootstrap_ci<F>(
+    y_true: &[i32],
+    scores: &[f32],
+    statistic: F,
+    n_resamples: usize,
+    seed: u64,
+) -> BootstrapCi
+where
+    F: Fn(&[i32], &[f32]) -> f32,
+{
+    use rand::SeedableRng;
+    use rand::seq::SliceRandom;
+
+    let point = statistic(y_true, scores);
+    let n = y_true.len();
+    if n < 2 {
+        return BootstrapCi {
+            point,
+            lo_95: point,
+            hi_95: point,
+        };
+    }
+
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(seed);
+    let indices: Vec<usize> = (0..n).collect();
+    let mut samples: Vec<f32> = Vec::with_capacity(n_resamples);
+
+    for _ in 0..n_resamples {
+        let boot: Vec<usize> = (0..n).map(|_| *indices.choose(&mut rng).unwrap()).collect();
+        let y_boot: Vec<i32> = boot.iter().map(|&i| y_true[i]).collect();
+        let s_boot: Vec<f32> = boot.iter().map(|&i| scores[i]).collect();
+        if y_boot.iter().any(|&v| v == 1) && y_boot.iter().any(|&v| v == 0) {
+            samples.push(statistic(&y_boot, &s_boot));
+        }
+    }
+
+    if samples.is_empty() {
+        return BootstrapCi {
+            point,
+            lo_95: point,
+            hi_95: point,
+        };
+    }
+    samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let lo = samples[(0.025 * samples.len() as f64) as usize];
+    let hi = samples[((0.975 * samples.len() as f64) as usize).min(samples.len() - 1)];
+    BootstrapCi {
+        point,
+        lo_95: lo,
+        hi_95: hi,
+    }
+}
+
 /// Brier score: mean squared error between probability and 0/1 outcome.
 /// Lower is better. Range `[0, 1]`. A model that always emits 0.5 yields 0.25.
 pub fn brier_score(y_true: &[i32], p1: &[f32]) -> f32 {
@@ -338,6 +402,136 @@ pub(crate) fn evaluate_threshold(y_true: &[i32], p1: &[f32], threshold: f32) -> 
     }
 }
 
+fn brier_baseline(y_true: &[i32]) -> f32 {
+    let n = y_true.len() as f32;
+    if n == 0.0 {
+        return 1.0;
+    }
+    let prev = y_true.iter().filter(|&&v| v == 1).count() as f32 / n;
+    prev * (1.0 - prev)
+}
+
+/// Brier Skill Score: 1 - Brier / Brier_baseline. Positive = better than climatology.
+pub fn brier_skill_score(y_true: &[i32], p1: &[f32]) -> f32 {
+    let base = brier_baseline(y_true);
+    if base < 1e-9 {
+        return 0.0;
+    }
+    1.0 - brier_score(y_true, p1) / base
+}
+
+/// Calibration slope and intercept via Newton-Raphson logistic regression of `y ~ logit(p)`.
+///
+/// A well-calibrated model has slope ≈ 1, intercept ≈ 0. Slope < 1 indicates
+/// over-confident predictions; slope > 1 indicates under-confident.
+pub fn calibration_slope_intercept(y_true: &[i32], p1: &[f32]) -> (f32, f32) {
+    let eps = 1e-7f32;
+    let logit: Vec<f64> = p1
+        .iter()
+        .map(|&p| {
+            let p = p.clamp(eps, 1.0 - eps) as f64;
+            (p / (1.0 - p)).ln()
+        })
+        .collect();
+    let t: Vec<f64> = y_true.iter().map(|&v| v as f64).collect();
+    let n = logit.len();
+
+    if n < 4 {
+        return (1.0, 0.0);
+    }
+    let var: f64 = {
+        let m = logit.iter().sum::<f64>() / n as f64;
+        logit.iter().map(|&x| (x - m).powi(2)).sum::<f64>() / n as f64
+    };
+    if var < 1e-12 {
+        return (1.0, 0.0);
+    }
+
+    let mut a = 1.0f64;
+    let mut b = 0.0f64;
+    let mut lambda = 1e-3f64;
+
+    let nll = |a: f64, b: f64| -> f64 {
+        logit
+            .iter()
+            .zip(t.iter())
+            .map(|(&s, &ti)| {
+                let f = a * s + b;
+                let lse = if f >= 0.0 {
+                    f + (1.0 + (-f).exp()).ln()
+                } else {
+                    (1.0 + f.exp()).ln()
+                };
+                lse - ti * f
+            })
+            .sum()
+    };
+
+    let mut prev_loss = nll(a, b);
+    for _ in 0..100 {
+        let (mut g_a, mut g_b) = (0.0f64, 0.0f64);
+        let (mut h_aa, mut h_bb, mut h_ab) = (0.0f64, 0.0f64, 0.0f64);
+        for (&s, &ti) in logit.iter().zip(t.iter()) {
+            let f = a * s + b;
+            let p = 1.0 / (1.0 + (-f).exp());
+            let r = p * (1.0 - p);
+            g_a += (p - ti) * s;
+            g_b += p - ti;
+            h_aa += r * s * s;
+            h_bb += r;
+            h_ab += r * s;
+        }
+        let mut accepted = false;
+        for _ in 0..10 {
+            let det = (h_aa + lambda) * (h_bb + lambda) - h_ab * h_ab;
+            if det <= 0.0 || !det.is_finite() {
+                lambda *= 4.0;
+                continue;
+            }
+            let da = (-g_a * (h_bb + lambda) + g_b * h_ab) / det;
+            let db = (g_a * h_ab - g_b * (h_aa + lambda)) / det;
+            let nl = nll(a + da, b + db);
+            if nl.is_finite() && nl < prev_loss {
+                a += da;
+                b += db;
+                prev_loss = nl;
+                lambda = (lambda * 0.5).max(1e-9);
+                accepted = true;
+                break;
+            }
+            lambda *= 4.0;
+        }
+        if !accepted {
+            break;
+        }
+        if g_a.abs() < 1e-7 && g_b.abs() < 1e-7 {
+            break;
+        }
+    }
+    (a as f32, b as f32)
+}
+
+/// Permutation p-value for AUC-ROC: proportion of permuted null AUCs >= observed.
+///
+/// Uses the (count + 1) / (n_perms + 1) estimator for conservative p-values.
+pub fn permutation_pvalue_auc(y_true: &[i32], scores: &[f32], n_perms: usize, seed: u64) -> f32 {
+    use rand::SeedableRng;
+    use rand::seq::SliceRandom;
+
+    let observed = auc_roc(y_true, scores);
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(seed);
+    let mut y_perm = y_true.to_vec();
+    let mut count_ge = 0usize;
+
+    for _ in 0..n_perms {
+        y_perm.shuffle(&mut rng);
+        if auc_roc(&y_perm, scores) >= observed {
+            count_ge += 1;
+        }
+    }
+    (count_ge + 1) as f32 / (n_perms + 1) as f32
+}
+
 /// Threshold maximising F1-score along the precision-recall curve, swept over
 /// the unique scores observed plus 0.0 and 1.0. Returns 0.5 when the sweep
 /// yields no positive predictions or when the input is empty.
@@ -516,13 +710,53 @@ mod tests {
 
     #[test]
     fn f1_threshold_maximises_f1_over_youden() {
-        // Imbalanced: 1 positive vs 4 negatives.
-        // F1 may prefer a threshold that trades specificity for recall.
         let y = vec![0, 0, 0, 0, 1];
         let p = vec![0.1f32, 0.2, 0.3, 0.45, 0.9];
         let t_f1 = f1_optimal_threshold(&y, &p);
         let r_f1 = evaluate_threshold(&y, &p, t_f1);
-        // F1 at the chosen threshold should be non-trivial.
         assert!(r_f1.f1 > 0.0, "f1 = {}", r_f1.f1);
+    }
+
+    #[test]
+    fn bootstrap_ci_ordering() {
+        let y = vec![0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1];
+        let s: Vec<f32> = (0..20).map(|i| i as f32 / 19.0).collect();
+        let ci = bootstrap_ci(&y, &s, auc_roc, 200, 42);
+        assert!(ci.lo_95 <= ci.point, "lo={} point={}", ci.lo_95, ci.point);
+        assert!(ci.point <= ci.hi_95, "point={} hi={}", ci.point, ci.hi_95);
+    }
+
+    #[test]
+    fn brier_skill_score_extremes() {
+        let y = vec![0i32, 0, 0, 1, 1, 1];
+        let perfect: Vec<f32> = y.iter().map(|&v| v as f32).collect();
+        let bss = brier_skill_score(&y, &perfect);
+        assert!(bss > 0.9, "bss={}", bss);
+        let n_pos = y.iter().filter(|&&v| v == 1).count() as f32;
+        let prev = n_pos / y.len() as f32;
+        let const_pred = vec![prev; y.len()];
+        let bss_base = brier_skill_score(&y, &const_pred);
+        assert!(bss_base.abs() < 0.01, "bss_base={}", bss_base);
+    }
+
+    #[test]
+    fn permutation_pvalue_uniform_for_random_scores() {
+        use rand::{Rng, SeedableRng};
+        use rand_chacha::ChaCha8Rng;
+        let mut rng = ChaCha8Rng::seed_from_u64(0);
+        let y: Vec<i32> = (0..40).map(|i| (i % 2) as i32).collect();
+        let mut pvals: Vec<f32> = (0..50)
+            .map(|seed| {
+                let scores: Vec<f32> = (0..40).map(|_| rng.gen_range(0.0f32..1.0)).collect();
+                permutation_pvalue_auc(&y, &scores, 500, seed)
+            })
+            .collect();
+        pvals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let below_half = pvals.iter().filter(|&&p| p < 0.5).count();
+        assert!(
+            below_half > 15 && below_half < 35,
+            "below_half={}",
+            below_half
+        );
     }
 }

@@ -11,6 +11,8 @@
 //! Use `CalibratorKind::fit_auto` to automatically select between them based
 //! on calibration set size.
 
+#![allow(dead_code)]
+
 use anyhow::{Result, bail};
 
 // ---------------------------------------------------------------------------

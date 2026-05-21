@@ -428,6 +428,18 @@ pub struct ClassificationParams {
     /// Number of trees in the random forest ensemble. Default 100.
     #[serde(default = "default_rf_n_trees")]
     pub rf_n_trees: usize,
+    /// Number of folds for subject-stratified k-fold CV. Default 7.
+    #[serde(default = "default_kfold_k")]
+    pub kfold_k: usize,
+    /// Bootstrap resamples for metric confidence intervals. Default 1000.
+    #[serde(default = "default_bootstrap_n_resamples")]
+    pub bootstrap_n_resamples: usize,
+    /// Label permutations for AUC p-value. Default 1000.
+    #[serde(default = "default_permutation_n_resamples")]
+    pub permutation_n_resamples: usize,
+    /// Per-tree feature subset ratio (0.0 = sqrt(p)). Default 0.0.
+    #[serde(default)]
+    pub rf_feature_subsample_ratio: f32,
 }
 
 fn default_knn_metric() -> String {
@@ -438,6 +450,18 @@ fn default_rf_n_trees() -> usize {
     100
 }
 
+fn default_kfold_k() -> usize {
+    7
+}
+
+fn default_bootstrap_n_resamples() -> usize {
+    1000
+}
+
+fn default_permutation_n_resamples() -> usize {
+    1000
+}
+
 impl Default for ClassificationParams {
     fn default() -> Self {
         Self {
@@ -445,6 +469,10 @@ impl Default for ClassificationParams {
             knn_metric: default_knn_metric(),
             pca_n_components: Vec::new(),
             rf_n_trees: default_rf_n_trees(),
+            kfold_k: default_kfold_k(),
+            bootstrap_n_resamples: default_bootstrap_n_resamples(),
+            permutation_n_resamples: default_permutation_n_resamples(),
+            rf_feature_subsample_ratio: 0.0,
         }
     }
 }

@@ -73,11 +73,7 @@ fn stratified_subject_split(group: &[String]) -> (Vec<String>, Vec<String>, Vec<
 /// Undersample the majority class within `train_idx` so both classes are equal.
 /// Calibration and holdout sets are left untouched — they retain the natural
 /// class ratio so evaluation reflects deployment conditions.
-pub fn balance_train_indices(
-    train_idx: &[usize],
-    ys: &[DatasetLabel],
-    seed: u64,
-) -> Vec<usize> {
+pub fn balance_train_indices(train_idx: &[usize], ys: &[DatasetLabel], seed: u64) -> Vec<usize> {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
 
     let mut class0: Vec<usize> = train_idx
@@ -100,6 +96,54 @@ pub fn balance_train_indices(
     let mut balanced: Vec<usize> = class0.into_iter().chain(class1).collect();
     balanced.shuffle(&mut rng);
     balanced
+}
+
+/// Returns `k` (train, calibration, holdout) subject-level folds.
+///
+/// Controls and anhedonics are shuffled then partitioned into `k` roughly-equal
+/// bins. For fold `i`: holdout = bin `i`, calib = bin `(i+1) % k`, train = the
+/// remaining `k-2` bins. Every subject appears in holdout exactly once and in
+/// calib exactly once across all folds. Requires `k >= 3`.
+pub fn subject_kfold_splits(
+    controls: &[String],
+    anhedonic: &[String],
+    k: usize,
+    seed: u64,
+) -> Vec<(Vec<String>, Vec<String>, Vec<String>)> {
+    assert!(k >= 3, "k must be >= 3 for a three-way split");
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    let mut controls = controls.to_vec();
+    let mut anhedonic = anhedonic.to_vec();
+    controls.shuffle(&mut rng);
+    anhedonic.shuffle(&mut rng);
+
+    let c_folds = partition_into_k(&controls, k);
+    let a_folds = partition_into_k(&anhedonic, k);
+
+    (0..k)
+        .map(|i| {
+            let calib_bin = (i + 1) % k;
+            let holdout: Vec<String> = c_folds[i].iter().chain(&a_folds[i]).cloned().collect();
+            let calib: Vec<String> = c_folds[calib_bin]
+                .iter()
+                .chain(&a_folds[calib_bin])
+                .cloned()
+                .collect();
+            let train: Vec<String> = (0..k)
+                .filter(|&j| j != i && j != calib_bin)
+                .flat_map(|j| c_folds[j].iter().chain(&a_folds[j]).cloned())
+                .collect();
+            (train, calib, holdout)
+        })
+        .collect()
+}
+
+fn partition_into_k(items: &[String], k: usize) -> Vec<Vec<String>> {
+    let mut folds: Vec<Vec<String>> = vec![Vec::new(); k];
+    for (i, item) in items.iter().enumerate() {
+        folds[i % k].push(item.clone());
+    }
+    folds
 }
 
 /// Row-level, label-stratified split. Returns indices for (train, test, val).
@@ -202,4 +246,88 @@ pub fn split_groups_stratified<T: Clone + PartialEq>(
     let val = va_idx.iter().map(|&i| unique_groups[i].0.clone()).collect();
 
     (train, test, val)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(n: usize, prefix: &str) -> Vec<String> {
+        (0..n).map(|i| format!("{}{}", prefix, i)).collect()
+    }
+
+    #[test]
+    fn kfold_every_subject_in_holdout_once() {
+        let controls = names(14, "c");
+        let anhedonics = names(7, "a");
+        let k = 7;
+        let splits = subject_kfold_splits(&controls, &anhedonics, k, 42);
+        assert_eq!(splits.len(), k);
+
+        let mut holdout_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for (_, _, holdout) in &splits {
+            for s in holdout {
+                *holdout_counts.entry(s.clone()).or_insert(0) += 1;
+            }
+        }
+        for (subj, count) in &holdout_counts {
+            assert_eq!(*count, 1, "subject {} in holdout {} times", subj, count);
+        }
+        assert_eq!(
+            holdout_counts.len(),
+            21,
+            "all 21 subjects must appear in holdout"
+        );
+    }
+
+    #[test]
+    fn kfold_every_subject_in_calib_once() {
+        let controls = names(14, "c");
+        let anhedonics = names(7, "a");
+        let k = 7;
+        let splits = subject_kfold_splits(&controls, &anhedonics, k, 42);
+
+        let mut calib_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for (_, calib, _) in &splits {
+            for s in calib {
+                *calib_counts.entry(s.clone()).or_insert(0) += 1;
+            }
+        }
+        for (subj, count) in &calib_counts {
+            assert_eq!(*count, 1, "subject {} in calib {} times", subj, count);
+        }
+    }
+
+    #[test]
+    fn kfold_no_overlap_between_splits() {
+        let controls = names(14, "c");
+        let anhedonics = names(7, "a");
+        let splits = subject_kfold_splits(&controls, &anhedonics, 7, 0);
+        for (train, calib, holdout) in &splits {
+            let t: std::collections::HashSet<_> = train.iter().collect();
+            let c: std::collections::HashSet<_> = calib.iter().collect();
+            let h: std::collections::HashSet<_> = holdout.iter().collect();
+            assert!(t.is_disjoint(&c), "train/calib overlap");
+            assert!(t.is_disjoint(&h), "train/holdout overlap");
+            assert!(c.is_disjoint(&h), "calib/holdout overlap");
+        }
+    }
+
+    #[test]
+    fn kfold_train_size_is_k_minus_2_bins() {
+        let controls = names(14, "c"); // 14/7 = 2 per bin
+        let anhedonics = names(7, "a"); // 7/7  = 1 per bin
+        let k = 7;
+        let splits = subject_kfold_splits(&controls, &anhedonics, k, 0);
+        for (train, _, _) in &splits {
+            assert_eq!(
+                train.len(),
+                15,
+                "expected 15 train subjects, got {}",
+                train.len()
+            );
+        }
+    }
 }

@@ -69,6 +69,28 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             &cfg.classification.pca_n_components,
         )?;
         eval_rf_three_way_split_subject_aware(
+            xs.clone(),
+            ys.clone(),
+            &groups,
+            cfg.classification.rf_n_trees,
+            "baseline_averaged",
+            source,
+            &results_dir,
+            &cfg.classification.pca_n_components,
+        )?;
+        eval_knn_kfold_subject_aware(
+            xs.clone(),
+            ys.clone(),
+            &groups,
+            cfg.classification.knn_num_neighbors,
+            metric,
+            "baseline_averaged",
+            source,
+            &results_dir,
+            &cfg.classification.pca_n_components,
+            cfg.classification.kfold_k,
+        )?;
+        eval_rf_kfold_subject_aware(
             xs,
             ys,
             &groups,
@@ -77,6 +99,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
             source,
             &results_dir,
             &cfg.classification.pca_n_components,
+            cfg.classification.kfold_k,
         )?;
     }
 

@@ -39,7 +39,10 @@ impl HemiFilter {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
 pub enum RoiSpec {
-    WithHemi { region: String, hemisphere: HemiFilter },
+    WithHemi {
+        region: String,
+        hemisphere: HemiFilter,
+    },
     Bare(String),
 }
 

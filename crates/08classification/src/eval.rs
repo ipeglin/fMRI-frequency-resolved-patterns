@@ -27,25 +27,30 @@ use std::path::Path;
 use tracing::info;
 use utils::bids_filename::BidsFilename;
 
-use crate::calibration::CalibratorKind;
-use crate::pca::PcaReducer;
 use crate::classifiers::{
     DistanceMetric, KNN, KnnConfig, RandomForestWrapper, accuracy, confusion_matrix_binary,
     sensitivity_from_cm, specificity_from_cm,
 };
 use crate::dataset::{FeatureSource, Label};
 use crate::metrics::{
-    CalibrationBin, ThresholdReport, auc_pr, auc_roc, brier_score, calibration_bins,
-    expected_calibration_error, f1_optimal_threshold, log_loss, specificity_constrained_threshold,
+    BootstrapCi, CalibrationBin, ThresholdReport, auc_pr, auc_roc, bootstrap_ci, brier_score,
+    brier_skill_score, calibration_bins, calibration_slope_intercept, expected_calibration_error,
+    f1_optimal_threshold, log_loss, permutation_pvalue_auc, specificity_constrained_threshold,
     threshold_sweep, youden_optimal_threshold,
 };
 use crate::normalizer::ZScoreNormalizer;
-use crate::splits::{balance_train_indices, split_rows_stratified_new, split_subjects_stratified};
+use crate::pca::PcaReducer;
+use crate::splits::{
+    balance_train_indices, split_rows_stratified_new, split_subjects_stratified,
+    subject_kfold_splits,
+};
 
 const SEED: u64 = 42;
 const SWEEP_THRESHOLDS: &[f32] = &[0.3, 0.4, 0.5, 0.6, 0.7];
 const N_CALIBRATION_BINS: usize = 10;
 const LOGLOSS_EPS: f32 = 1e-7;
+const N_BOOTSTRAP: usize = 1000;
+const N_PERMUTATIONS: usize = 1000;
 /// Minimum specificity for the `at_spec90` operating point.
 const TARGET_SPECIFICITY: f32 = 0.90;
 
@@ -67,34 +72,29 @@ struct HardReport {
 
 #[derive(Debug, Serialize)]
 struct ProbabilisticReport {
-    brier: f32,
-    log_loss: f32,
-    auc_roc: f32,
-    auc_pr: f32,
+    brier: BootstrapCi,
+    log_loss: BootstrapCi,
+    auc_roc: BootstrapCi,
+    auc_pr: BootstrapCi,
+    brier_skill_score: BootstrapCi,
+    calibration_slope: f32,
+    calibration_intercept: f32,
+    auc_roc_perm_pvalue: f32,
     expected_calibration_error: f32,
     calibration_bins: Vec<CalibrationBin>,
     threshold_sweep: Vec<ThresholdReport>,
     youden_threshold: f32,
-    /// Threshold maximising F1-score along the PR curve.
     f1_threshold: f32,
 }
 
 #[derive(Debug, Serialize)]
 struct SplitReport {
     n_samples: usize,
-    /// Hard-decision metrics at the legacy 0.5 threshold.
     at_0_5: HardReport,
-    /// Hard-decision metrics at the Youden-optimal threshold (found on calibration set).
     at_youden: HardReport,
-    /// Hard-decision metrics at the F1-optimal threshold (found on calibration set).
     at_f1: HardReport,
-    /// Hard-decision metrics at the specificity-constrained threshold (found on calibration set).
-    /// Threshold is the lowest value achieving specificity ≥ TARGET_SPECIFICITY.
     at_spec90: HardReport,
-    /// Probabilistic block computed on raw model vote-share.
-    raw: ProbabilisticReport,
-    /// Probabilistic block after calibration fit on the calibration split.
-    calibrated: ProbabilisticReport,
+    probabilistic: ProbabilisticReport,
 }
 
 #[derive(Debug, Serialize)]
@@ -117,8 +117,7 @@ struct PerSamplePrediction {
     leaf: Option<String>,
     roi: Option<usize>,
     y_true: i32,
-    p1_raw: f32,
-    p1_calibrated: f32,
+    p1: f32,
 }
 
 #[derive(Debug, Serialize)]
@@ -131,11 +130,6 @@ struct ClassificationReport {
     metric: String,
     distance_weighted: bool,
     n_train: usize,
-    /// "platt" or "isotonic" — indicates which calibrator was selected.
-    calibration_method: String,
-    /// Platt parameters. NaN when isotonic calibration was used.
-    platt_a: f32,
-    platt_b: f32,
     /// Number of PCA components used. None = no PCA (full 1920-dim vectors).
     pca_components: Option<usize>,
     /// Number of trees (random forest only; None for KNN).
@@ -145,6 +139,51 @@ struct ClassificationReport {
     calibration_predictions: Vec<PerSamplePrediction>,
     holdout_predictions: Vec<PerSamplePrediction>,
     split_manifest: SplitManifest,
+}
+
+struct FoldOutput {
+    calibration: SplitReport,
+    holdout: SplitReport,
+    calibration_predictions: Vec<PerSamplePrediction>,
+    holdout_predictions: Vec<PerSamplePrediction>,
+}
+
+#[derive(Debug, Serialize)]
+struct KFoldFoldReport {
+    fold: usize,
+    n_train: usize,
+    n_calibration: usize,
+    n_holdout: usize,
+    holdout: SplitReport,
+    split_manifest: SplitManifest,
+}
+
+#[derive(Debug, Serialize)]
+struct AggregatedMetrics {
+    mean_auc_roc: f32,
+    std_auc_roc: f32,
+    mean_auc_pr: f32,
+    std_auc_pr: f32,
+    mean_brier: f32,
+    std_brier: f32,
+    mean_log_loss: f32,
+    std_log_loss: f32,
+}
+
+#[derive(Debug, Serialize)]
+struct KFoldClassificationReport {
+    analysis: String,
+    source: String,
+    split_seed: u64,
+    classifier: String,
+    num_neighbors: usize,
+    metric: String,
+    distance_weighted: bool,
+    pca_components: Option<usize>,
+    n_trees: Option<usize>,
+    k_folds: usize,
+    folds: Vec<KFoldFoldReport>,
+    aggregated: AggregatedMetrics,
 }
 
 fn split_entry(indices: &[usize], groups: &[String], ys: &[Label]) -> SplitEntry {
@@ -181,6 +220,236 @@ fn parse_group(g: &str) -> (String, Option<String>, Option<usize>) {
 
 fn parse_subject(g: &str) -> String {
     parse_group(g).0
+}
+
+type SplitArrays = (
+    Vec<Vec<f32>>,
+    Vec<i32>,
+    Vec<Vec<f32>>,
+    Vec<i32>,
+    Vec<Vec<f32>>,
+    Vec<i32>,
+);
+
+/// Fill pre-allocated split vectors by cloning rows from `xs`/`ys` by index.
+/// Takes references so `xs`/`ys` can be reused across multiple folds.
+fn fill_splits(
+    train_idx: &[usize],
+    calib_idx: &[usize],
+    holdout_idx: &[usize],
+    xs: &[Vec<f32>],
+    ys: &[Label],
+) -> SplitArrays {
+    let mut x_train = vec![Vec::<f32>::new(); train_idx.len()];
+    let mut y_train = vec![0i32; train_idx.len()];
+    let mut x_calib = vec![Vec::<f32>::new(); calib_idx.len()];
+    let mut y_calib = vec![0i32; calib_idx.len()];
+    let mut x_holdout = vec![Vec::<f32>::new(); holdout_idx.len()];
+    let mut y_holdout = vec![0i32; holdout_idx.len()];
+    for (slot, &i) in train_idx.iter().enumerate() {
+        x_train[slot] = xs[i].clone();
+        y_train[slot] = ys[i].as_i32();
+    }
+    for (slot, &i) in calib_idx.iter().enumerate() {
+        x_calib[slot] = xs[i].clone();
+        y_calib[slot] = ys[i].as_i32();
+    }
+    for (slot, &i) in holdout_idx.iter().enumerate() {
+        x_holdout[slot] = xs[i].clone();
+        y_holdout[slot] = ys[i].as_i32();
+    }
+    (x_train, y_train, x_calib, y_calib, x_holdout, y_holdout)
+}
+
+/// Normalize, optionally reduce via PCA, fit KNN, calibrate, and compute metrics.
+#[allow(clippy::too_many_arguments)]
+fn compute_knn(
+    mut x_train: Vec<Vec<f32>>,
+    y_train: Vec<i32>,
+    mut x_calib: Vec<Vec<f32>>,
+    y_calib: Vec<i32>,
+    mut x_holdout: Vec<Vec<f32>>,
+    y_holdout: Vec<i32>,
+    calib_parsed: Vec<(String, Option<String>, Option<usize>)>,
+    holdout_parsed: Vec<(String, Option<String>, Option<usize>)>,
+    num_neighbors: usize,
+    metric: DistanceMetric,
+    pca_n_components: Option<usize>,
+) -> Result<FoldOutput> {
+    let normalizer = ZScoreNormalizer::fit_f32(&x_train);
+    normalizer.transform_f32_inplace(&mut x_train);
+    normalizer.transform_f32_inplace(&mut x_calib);
+    normalizer.transform_f32_inplace(&mut x_holdout);
+
+    if let Some(k) = pca_n_components {
+        let reducer = PcaReducer::fit(&x_train, k)?;
+        x_train = reducer.transform(&x_train);
+        x_calib = reducer.transform(&x_calib);
+        x_holdout = reducer.transform(&x_holdout);
+    }
+
+    let mut knn = KNN::new(KnnConfig {
+        num_neighbors,
+        metric,
+        distance_weighted: true,
+        mahalanobis_shrinkage: 0.0,
+    });
+    knn.fit(x_train, y_train)?;
+
+    let classes = knn.classes().to_vec();
+    let pos_idx = p1_index(&classes)
+        .ok_or_else(|| anyhow::anyhow!("positive class label `1` missing from training data"))?;
+
+    let p1_calib: Vec<f32> = knn
+        .predict_proba_batch(&x_calib)?
+        .into_iter()
+        .map(|row| row[pos_idx])
+        .collect();
+    let p1_holdout: Vec<f32> = knn
+        .predict_proba_batch(&x_holdout)?
+        .into_iter()
+        .map(|row| row[pos_idx])
+        .collect();
+    drop(x_calib);
+    drop(x_holdout);
+
+    let calib_youden_t = youden_optimal_threshold(&y_calib, &p1_calib);
+    let calib_f1_t = f1_optimal_threshold(&y_calib, &p1_calib);
+    let calib_spec90_t = specificity_constrained_threshold(&y_calib, &p1_calib, TARGET_SPECIFICITY);
+
+    Ok(FoldOutput {
+        calibration: SplitReport {
+            n_samples: y_calib.len(),
+            at_0_5: hard_report_at(&y_calib, &p1_calib, 0.5),
+            at_youden: hard_report_at(&y_calib, &p1_calib, calib_youden_t),
+            at_f1: hard_report_at(&y_calib, &p1_calib, calib_f1_t),
+            at_spec90: hard_report_at(&y_calib, &p1_calib, calib_spec90_t),
+            probabilistic: prob_report(&y_calib, &p1_calib),
+        },
+        holdout: SplitReport {
+            n_samples: y_holdout.len(),
+            at_0_5: hard_report_at(&y_holdout, &p1_holdout, 0.5),
+            at_youden: hard_report_at(&y_holdout, &p1_holdout, calib_youden_t),
+            at_f1: hard_report_at(&y_holdout, &p1_holdout, calib_f1_t),
+            at_spec90: hard_report_at(&y_holdout, &p1_holdout, calib_spec90_t),
+            probabilistic: prob_report(&y_holdout, &p1_holdout),
+        },
+        calibration_predictions: build_predictions(calib_parsed, &y_calib, &p1_calib),
+        holdout_predictions: build_predictions(holdout_parsed, &y_holdout, &p1_holdout),
+    })
+}
+
+/// Normalize, optionally reduce via PCA, fit RF, and compute metrics.
+#[allow(clippy::too_many_arguments)]
+fn compute_rf(
+    mut x_train: Vec<Vec<f32>>,
+    y_train: Vec<i32>,
+    mut x_calib: Vec<Vec<f32>>,
+    y_calib: Vec<i32>,
+    mut x_holdout: Vec<Vec<f32>>,
+    y_holdout: Vec<i32>,
+    calib_parsed: Vec<(String, Option<String>, Option<usize>)>,
+    holdout_parsed: Vec<(String, Option<String>, Option<usize>)>,
+    n_trees: usize,
+    pca_n_components: Option<usize>,
+    feature_subsample_ratio: f32,
+) -> Result<FoldOutput> {
+    let normalizer = ZScoreNormalizer::fit_f32(&x_train);
+    normalizer.transform_f32_inplace(&mut x_train);
+    normalizer.transform_f32_inplace(&mut x_calib);
+    normalizer.transform_f32_inplace(&mut x_holdout);
+
+    if let Some(k) = pca_n_components {
+        let reducer = PcaReducer::fit(&x_train, k)?;
+        x_train = reducer.transform(&x_train);
+        x_calib = reducer.transform(&x_calib);
+        x_holdout = reducer.transform(&x_holdout);
+    }
+
+    let rf = RandomForestWrapper::fit(&x_train, &y_train, n_trees, SEED, feature_subsample_ratio)?;
+    drop(x_train);
+
+    let classes = rf.classes.clone();
+    let pos_idx = p1_index(&classes).ok_or_else(|| {
+        anyhow::anyhow!("RF eval: positive class label `1` missing from training data")
+    })?;
+
+    let p1_calib: Vec<f32> = rf
+        .predict_proba_batch(&x_calib)?
+        .into_iter()
+        .map(|row| row[pos_idx])
+        .collect();
+    let p1_holdout: Vec<f32> = rf
+        .predict_proba_batch(&x_holdout)?
+        .into_iter()
+        .map(|row| row[pos_idx])
+        .collect();
+    drop(x_calib);
+    drop(x_holdout);
+
+    let calib_youden_t = youden_optimal_threshold(&y_calib, &p1_calib);
+    let calib_f1_t = f1_optimal_threshold(&y_calib, &p1_calib);
+    let calib_spec90_t = specificity_constrained_threshold(&y_calib, &p1_calib, TARGET_SPECIFICITY);
+
+    Ok(FoldOutput {
+        calibration: SplitReport {
+            n_samples: y_calib.len(),
+            at_0_5: hard_report_at(&y_calib, &p1_calib, 0.5),
+            at_youden: hard_report_at(&y_calib, &p1_calib, calib_youden_t),
+            at_f1: hard_report_at(&y_calib, &p1_calib, calib_f1_t),
+            at_spec90: hard_report_at(&y_calib, &p1_calib, calib_spec90_t),
+            probabilistic: prob_report(&y_calib, &p1_calib),
+        },
+        holdout: SplitReport {
+            n_samples: y_holdout.len(),
+            at_0_5: hard_report_at(&y_holdout, &p1_holdout, 0.5),
+            at_youden: hard_report_at(&y_holdout, &p1_holdout, calib_youden_t),
+            at_f1: hard_report_at(&y_holdout, &p1_holdout, calib_f1_t),
+            at_spec90: hard_report_at(&y_holdout, &p1_holdout, calib_spec90_t),
+            probabilistic: prob_report(&y_holdout, &p1_holdout),
+        },
+        calibration_predictions: build_predictions(calib_parsed, &y_calib, &p1_calib),
+        holdout_predictions: build_predictions(holdout_parsed, &y_holdout, &p1_holdout),
+    })
+}
+
+fn aggregate_kfold_metrics(folds: &[KFoldFoldReport]) -> AggregatedMetrics {
+    let n = folds.len() as f32;
+    let auc_rocs: Vec<f32> = folds
+        .iter()
+        .map(|f| f.holdout.probabilistic.auc_roc.point)
+        .collect();
+    let auc_prs: Vec<f32> = folds
+        .iter()
+        .map(|f| f.holdout.probabilistic.auc_pr.point)
+        .collect();
+    let briers: Vec<f32> = folds
+        .iter()
+        .map(|f| f.holdout.probabilistic.brier.point)
+        .collect();
+    let log_losses: Vec<f32> = folds
+        .iter()
+        .map(|f| f.holdout.probabilistic.log_loss.point)
+        .collect();
+
+    let mean_f = |v: &[f32]| v.iter().sum::<f32>() / n;
+    let std_f = |v: &[f32], m: f32| (v.iter().map(|x| (x - m).powi(2)).sum::<f32>() / n).sqrt();
+
+    let m_roc = mean_f(&auc_rocs);
+    let m_pr = mean_f(&auc_prs);
+    let m_brier = mean_f(&briers);
+    let m_ll = mean_f(&log_losses);
+
+    AggregatedMetrics {
+        mean_auc_roc: m_roc,
+        std_auc_roc: std_f(&auc_rocs, m_roc),
+        mean_auc_pr: m_pr,
+        std_auc_pr: std_f(&auc_prs, m_pr),
+        mean_brier: m_brier,
+        std_brier: std_f(&briers, m_brier),
+        mean_log_loss: m_ll,
+        std_log_loss: std_f(&log_losses, m_ll),
+    }
 }
 
 fn hard_report_at(y_true: &[i32], p1: &[f32], threshold: f32) -> HardReport {
@@ -237,11 +506,22 @@ fn hard_report_at(y_true: &[i32], p1: &[f32], threshold: f32) -> HardReport {
 fn prob_report(y_true: &[i32], p1: &[f32]) -> ProbabilisticReport {
     let bins = calibration_bins(y_true, p1, N_CALIBRATION_BINS);
     let ece = expected_calibration_error(&bins);
+    let (cal_slope, cal_intercept) = calibration_slope_intercept(y_true, p1);
     ProbabilisticReport {
-        brier: brier_score(y_true, p1),
-        log_loss: log_loss(y_true, p1, LOGLOSS_EPS),
-        auc_roc: auc_roc(y_true, p1),
-        auc_pr: auc_pr(y_true, p1),
+        brier: bootstrap_ci(y_true, p1, brier_score, N_BOOTSTRAP, SEED),
+        log_loss: bootstrap_ci(
+            y_true,
+            p1,
+            |y, s| log_loss(y, s, LOGLOSS_EPS),
+            N_BOOTSTRAP,
+            SEED + 1,
+        ),
+        auc_roc: bootstrap_ci(y_true, p1, auc_roc, N_BOOTSTRAP, SEED + 2),
+        auc_pr: bootstrap_ci(y_true, p1, auc_pr, N_BOOTSTRAP, SEED + 3),
+        brier_skill_score: bootstrap_ci(y_true, p1, brier_skill_score, N_BOOTSTRAP, SEED + 4),
+        calibration_slope: cal_slope,
+        calibration_intercept: cal_intercept,
+        auc_roc_perm_pvalue: permutation_pvalue_auc(y_true, p1, N_PERMUTATIONS, SEED + 5),
         expected_calibration_error: ece,
         calibration_bins: bins,
         threshold_sweep: threshold_sweep(y_true, p1, SWEEP_THRESHOLDS),
@@ -257,8 +537,7 @@ fn p1_index(classes: &[i32]) -> Option<usize> {
 fn build_predictions(
     parsed_groups: Vec<(String, Option<String>, Option<usize>)>,
     y_true: &[i32],
-    p1_raw: &[f32],
-    p1_cal: &[f32],
+    p1: &[f32],
 ) -> Vec<PerSamplePrediction> {
     parsed_groups
         .into_iter()
@@ -268,8 +547,7 @@ fn build_predictions(
             leaf,
             roi,
             y_true: y_true[j],
-            p1_raw: p1_raw[j],
-            p1_calibrated: p1_cal[j],
+            p1: p1[j],
         })
         .collect()
 }
@@ -278,16 +556,15 @@ fn write_subject_probs_csv<'a>(
     path: &Path,
     predictions: impl IntoIterator<Item = &'a PerSamplePrediction>,
 ) -> Result<()> {
-    let mut out = String::from("subject\tleaf\troi\ty_true\tp1_raw\tp1_calibrated\n");
+    let mut out = String::from("subject\tleaf\troi\ty_true\tp1\n");
     for p in predictions {
         out.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}\n",
             p.subject,
             p.leaf.as_deref().unwrap_or(""),
             p.roi.map(|r| r.to_string()).unwrap_or_default(),
             p.y_true,
-            p.p1_raw,
-            p.p1_calibrated,
+            p.p1,
         ));
     }
     fs::write(path, out)?;
@@ -314,170 +591,57 @@ fn run_knn_pipeline(
     results_dir: &Path,
     pca_n_components: Option<usize>,
 ) -> Result<()> {
-    // Pre-compute everything we need from `groups` before we consume `xs`/`ys`,
-    // so the per-row iteration that follows can move rows directly into the
-    // split buffers without ever holding the original row twice.
     let train_entry = split_entry(&train_idx, groups, &ys);
     let calib_entry = split_entry(&calibration_idx, groups, &ys);
     let holdout_entry = split_entry(&holdout_idx, groups, &ys);
-    let calib_parsed: Vec<(String, Option<String>, Option<usize>)> =
-        calibration_idx.iter().map(|&i| parse_group(&groups[i])).collect();
-    let holdout_parsed: Vec<(String, Option<String>, Option<usize>)> =
-        holdout_idx.iter().map(|&i| parse_group(&groups[i])).collect();
+    let calib_parsed: Vec<(String, Option<String>, Option<usize>)> = calibration_idx
+        .iter()
+        .map(|&i| parse_group(&groups[i]))
+        .collect();
+    let holdout_parsed: Vec<(String, Option<String>, Option<usize>)> = holdout_idx
+        .iter()
+        .map(|&i| parse_group(&groups[i]))
+        .collect();
 
-    // Build a per-row destination map: index → (split, slot in split). One
-    // pass over `xs.into_iter()` then drains every row into exactly one
-    // split (or drops it). Original `xs` Vec spine is freed at the end of
-    // the loop; only the three split Vecs survive.
-    #[derive(Clone, Copy)]
-    enum Bucket {
-        Train(usize),
-        Calibration(usize),
-        Holdout(usize),
-        None,
-    }
-    let n = ys.len();
-    let mut bucket = vec![Bucket::None; n];
-    for (slot, &i) in train_idx.iter().enumerate() {
-        bucket[i] = Bucket::Train(slot);
-    }
-    for (slot, &i) in calibration_idx.iter().enumerate() {
-        bucket[i] = Bucket::Calibration(slot);
-    }
-    for (slot, &i) in holdout_idx.iter().enumerate() {
-        bucket[i] = Bucket::Holdout(slot);
-    }
+    let (x_train, y_train, x_calib, y_calib, x_holdout, y_holdout) =
+        fill_splits(&train_idx, &calibration_idx, &holdout_idx, &xs, &ys);
+    let n_train = x_train.len();
+    drop(xs);
+    drop(ys);
 
-    let placeholder_row: Vec<f32> = Vec::new();
-    let mut x_train_n: Vec<Vec<f32>> = vec![placeholder_row.clone(); train_idx.len()];
-    let mut x_calib_n: Vec<Vec<f32>> = vec![placeholder_row.clone(); calibration_idx.len()];
-    let mut x_holdout_n: Vec<Vec<f32>> = vec![placeholder_row; holdout_idx.len()];
-    let mut y_train: Vec<i32> = vec![0; train_idx.len()];
-    let mut y_calib: Vec<i32> = vec![0; calibration_idx.len()];
-    let mut y_holdout: Vec<i32> = vec![0; holdout_idx.len()];
-
-    for (i, (row, label)) in xs.into_iter().zip(ys.into_iter()).enumerate() {
-        match bucket[i] {
-            Bucket::Train(s) => {
-                x_train_n[s] = row;
-                y_train[s] = label.as_i32();
-            }
-            Bucket::Calibration(s) => {
-                x_calib_n[s] = row;
-                y_calib[s] = label.as_i32();
-            }
-            Bucket::Holdout(s) => {
-                x_holdout_n[s] = row;
-                y_holdout[s] = label.as_i32();
-            }
-            Bucket::None => {}
-        }
-    }
-    drop(bucket);
-
-    // Fit then normalise in-place. f32-native — no f64 round-trip, no extra
-    // full-dataset allocations. Combined with the move-into-splits above,
-    // peak memory is ~2× xs (xs in caller is already freed by the time we
-    // get here; the live data is the three split Vecs only).
-    let normalizer = ZScoreNormalizer::fit_f32(&x_train_n);
-    normalizer.transform_f32_inplace(&mut x_train_n);
-    normalizer.transform_f32_inplace(&mut x_calib_n);
-    normalizer.transform_f32_inplace(&mut x_holdout_n);
-
-    // Optional PCA: fit on train-only (no leakage), transform all splits.
-    if let Some(k) = pca_n_components {
-        let reducer = PcaReducer::fit(&x_train_n, k)?;
-        x_train_n = reducer.transform(&x_train_n);
-        x_calib_n = reducer.transform(&x_calib_n);
-        x_holdout_n = reducer.transform(&x_holdout_n);
-    }
-
-    // Distance-weight votes so the raw probability is smoother than k-step
-    // quantisation. This is the change that makes p1_raw a useful input to
-    // Platt scaling on small calibration sets.
-    let mut knn = KNN::new(KnnConfig {
+    let output = compute_knn(
+        x_train,
+        y_train,
+        x_calib,
+        y_calib,
+        x_holdout,
+        y_holdout,
+        calib_parsed,
+        holdout_parsed,
         num_neighbors,
         metric,
-        distance_weighted: true,
-        mahalanobis_shrinkage: 0.0,
-    });
-    knn.fit(x_train_n, y_train)?;
-
-    let classes = knn.classes().to_vec();
-    let pos_idx = p1_index(&classes).ok_or_else(|| {
-        anyhow::anyhow!("eval: positive class label `1` missing from training data")
-    })?;
-
-    // Forecasting model
-    let p1 = |xs: &[Vec<f32>]| -> Result<Vec<f32>> {
-        Ok(knn
-            .predict_proba_batch(xs)?
-            .into_iter()
-            .map(|row| row[pos_idx])
-            .collect())
-    };
-
-    let p1_calib_raw = p1(&x_calib_n)?;
-    let p1_holdout_raw = p1(&x_holdout_n)?;
-
-    drop(x_calib_n);
-    drop(x_holdout_n);
-
-    // Calibrator is fit on the calibration split only (no holdout leakage).
-    // Selector: isotonic for n > 1000, Platt for n ≤ 1000.
-    // The fitted calibrator is then applied to both splits to produce p1_cal.
-    let calibrator = CalibratorKind::fit_auto(&p1_calib_raw, &y_calib);
-    let p1_calib_cal = calibrator.transform_slice(&p1_calib_raw);
-    let p1_holdout_cal = calibrator.transform_slice(&p1_holdout_raw);
-
-    // All thresholds derived from calibration set only — never from holdout.
-    let calib_youden_t = youden_optimal_threshold(&y_calib, &p1_calib_cal);
-    let calib_f1_t = f1_optimal_threshold(&y_calib, &p1_calib_cal);
-    let calib_spec90_t = specificity_constrained_threshold(&y_calib, &p1_calib_cal, TARGET_SPECIFICITY);
-    let calibration_split = SplitReport {
-        n_samples: calibration_idx.len(),
-        at_0_5: hard_report_at(&y_calib, &p1_calib_cal, 0.5),
-        at_youden: hard_report_at(&y_calib, &p1_calib_cal, calib_youden_t),
-        at_f1: hard_report_at(&y_calib, &p1_calib_cal, calib_f1_t),
-        at_spec90: hard_report_at(&y_calib, &p1_calib_cal, calib_spec90_t),
-        raw: prob_report(&y_calib, &p1_calib_raw),
-        calibrated: prob_report(&y_calib, &p1_calib_cal),
-    };
-    let holdout_split = SplitReport {
-        n_samples: holdout_idx.len(),
-        at_0_5: hard_report_at(&y_holdout, &p1_holdout_cal, 0.5),
-        at_youden: hard_report_at(&y_holdout, &p1_holdout_cal, calib_youden_t),
-        at_f1: hard_report_at(&y_holdout, &p1_holdout_cal, calib_f1_t),
-        at_spec90: hard_report_at(&y_holdout, &p1_holdout_cal, calib_spec90_t),
-        raw: prob_report(&y_holdout, &p1_holdout_raw),
-        calibrated: prob_report(&y_holdout, &p1_holdout_cal),
-    };
+        pca_n_components,
+    )?;
 
     info!(
         analysis,
         source = ?source,
-        n_train = train_idx.len(),
+        n_train,
         n_calibration = calibration_idx.len(),
         n_holdout = holdout_idx.len(),
-        holdout_acc_0_5 = format!("{:.2}%", holdout_split.at_0_5.accuracy * 100.0),
-        holdout_acc_youden = format!("{:.2}%", holdout_split.at_youden.accuracy * 100.0),
-        holdout_acc_spec90 = format!("{:.2}%", holdout_split.at_spec90.accuracy * 100.0),
-        holdout_spec_spec90 = format!("{:.2}%", holdout_split.at_spec90.specificity * 100.0),
-        holdout_brier_cal = format!("{:.4}", holdout_split.calibrated.brier),
-        holdout_logloss_cal = format!("{:.4}", holdout_split.calibrated.log_loss),
-        holdout_auc_pr_cal = format!("{:.4}", holdout_split.calibrated.auc_pr),
-        holdout_auc_roc_cal = format!("{:.4}", holdout_split.calibrated.auc_roc),
-        holdout_ece_cal = format!("{:.4}", holdout_split.calibrated.expected_calibration_error),
-        holdout_youden_t = format!("{:.3}", calib_youden_t),
-        holdout_spec90_t = format!("{:.3}", calib_spec90_t),
-        holdout_cm_youden = ?holdout_split.at_youden.confusion_matrix,
-        calibration_method = calibrator.method_name(),
-        platt_a = calibrator.platt_params().0,
-        platt_b = calibrator.platt_params().1,
+        holdout_acc_0_5 = format!("{:.2}%", output.holdout.at_0_5.accuracy * 100.0),
+        holdout_acc_youden = format!("{:.2}%", output.holdout.at_youden.accuracy * 100.0),
+        holdout_acc_spec90 = format!("{:.2}%", output.holdout.at_spec90.accuracy * 100.0),
+        holdout_spec_spec90 = format!("{:.2}%", output.holdout.at_spec90.specificity * 100.0),
+        holdout_brier = format!("{:.4}", output.holdout.probabilistic.brier.point),
+        holdout_logloss = format!("{:.4}", output.holdout.probabilistic.log_loss.point),
+        holdout_auc_pr = format!("{:.4}", output.holdout.probabilistic.auc_pr.point),
+        holdout_auc_roc = format!("{:.4}", output.holdout.probabilistic.auc_roc.point),
+        holdout_ece = format!("{:.4}", output.holdout.probabilistic.expected_calibration_error),
+        holdout_cm_youden = ?output.holdout.at_youden.confusion_matrix,
         "knn probabilistic results"
     );
 
-    // Write PCA results into a subdirectory so they don't collide with full-vector results.
     let effective_results_dir;
     let results_dir: &Path = if let Some(k) = pca_n_components {
         effective_results_dir = results_dir.join(format!("pca_{k}"));
@@ -488,8 +652,6 @@ fn run_knn_pipeline(
     fs::create_dir_all(results_dir)?;
     let source_name = source.dir().to_string();
     let metric_name = metric.as_str().to_string();
-    let calibration_predictions = build_predictions(calib_parsed, &y_calib, &p1_calib_raw, &p1_calib_cal);
-    let holdout_predictions = build_predictions(holdout_parsed, &y_holdout, &p1_holdout_raw, &p1_holdout_cal);
 
     let report = ClassificationReport {
         analysis: analysis.to_string(),
@@ -499,16 +661,13 @@ fn run_knn_pipeline(
         num_neighbors,
         metric: metric_name.clone(),
         distance_weighted: true,
-        n_train: train_idx.len(),
-        calibration_method: calibrator.method_name().to_string(),
-        platt_a: calibrator.platt_params().0,
-        platt_b: calibrator.platt_params().1,
+        n_train,
         pca_components: pca_n_components,
         n_trees: None,
-        calibration: calibration_split,
-        holdout: holdout_split,
-        calibration_predictions,
-        holdout_predictions,
+        calibration: output.calibration,
+        holdout: output.holdout,
+        calibration_predictions: output.calibration_predictions,
+        holdout_predictions: output.holdout_predictions,
         split_manifest: SplitManifest {
             train: train_entry,
             calibration: calib_entry,
@@ -727,7 +886,7 @@ pub fn eval_knn_three_way_split_subject_aware(
 }
 
 /// Shared Random Forest pipeline — takes pre-computed split indices and runs
-/// normalization, optional PCA, RF fit, calibration, metric computation, and output.
+/// normalization, optional PCA, RF fit, metric computation, and output.
 ///
 /// When `pca_n_components` is `Some(k)`, results are written to `results_dir/pca_{k}/`.
 #[allow(clippy::too_many_arguments)]
@@ -743,119 +902,51 @@ fn run_rf_pipeline(
     source: FeatureSource,
     results_dir: &Path,
     pca_n_components: Option<usize>,
+    feature_subsample_ratio: f32,
 ) -> Result<()> {
     let train_entry = split_entry(&train_idx, groups, &ys);
     let calib_entry = split_entry(&calibration_idx, groups, &ys);
     let holdout_entry = split_entry(&holdout_idx, groups, &ys);
-    let calib_parsed: Vec<(String, Option<String>, Option<usize>)> =
-        calibration_idx.iter().map(|&i| parse_group(&groups[i])).collect();
-    let holdout_parsed: Vec<(String, Option<String>, Option<usize>)> =
-        holdout_idx.iter().map(|&i| parse_group(&groups[i])).collect();
-
-    #[derive(Clone, Copy)]
-    enum Bucket { Train(usize), Calibration(usize), Holdout(usize), None }
-    let n = ys.len();
-    let mut bucket = vec![Bucket::None; n];
-    for (slot, &i) in train_idx.iter().enumerate() { bucket[i] = Bucket::Train(slot); }
-    for (slot, &i) in calibration_idx.iter().enumerate() { bucket[i] = Bucket::Calibration(slot); }
-    for (slot, &i) in holdout_idx.iter().enumerate() { bucket[i] = Bucket::Holdout(slot); }
-
-    let placeholder_row: Vec<f32> = Vec::new();
-    let mut x_train_n: Vec<Vec<f32>> = vec![placeholder_row.clone(); train_idx.len()];
-    let mut x_calib_n: Vec<Vec<f32>> = vec![placeholder_row.clone(); calibration_idx.len()];
-    let mut x_holdout_n: Vec<Vec<f32>> = vec![placeholder_row; holdout_idx.len()];
-    let mut y_train: Vec<i32> = vec![0; train_idx.len()];
-    let mut y_calib: Vec<i32> = vec![0; calibration_idx.len()];
-    let mut y_holdout: Vec<i32> = vec![0; holdout_idx.len()];
-
-    for (i, (row, label)) in xs.into_iter().zip(ys.into_iter()).enumerate() {
-        match bucket[i] {
-            Bucket::Train(s) => { x_train_n[s] = row; y_train[s] = label.as_i32(); }
-            Bucket::Calibration(s) => { x_calib_n[s] = row; y_calib[s] = label.as_i32(); }
-            Bucket::Holdout(s) => { x_holdout_n[s] = row; y_holdout[s] = label.as_i32(); }
-            Bucket::None => {}
-        }
-    }
-    drop(bucket);
-
-    let normalizer = ZScoreNormalizer::fit_f32(&x_train_n);
-    normalizer.transform_f32_inplace(&mut x_train_n);
-    normalizer.transform_f32_inplace(&mut x_calib_n);
-    normalizer.transform_f32_inplace(&mut x_holdout_n);
-
-    if let Some(k) = pca_n_components {
-        let reducer = PcaReducer::fit(&x_train_n, k)?;
-        x_train_n = reducer.transform(&x_train_n);
-        x_calib_n = reducer.transform(&x_calib_n);
-        x_holdout_n = reducer.transform(&x_holdout_n);
-    }
-
-    let rf = RandomForestWrapper::fit(&x_train_n, &y_train, n_trees, SEED)?;
-    drop(x_train_n);
-
-    let classes = rf.classes.clone();
-    let pos_idx = p1_index(&classes).ok_or_else(|| {
-        anyhow::anyhow!("RF eval: positive class label `1` missing from training data")
-    })?;
-
-    let p1_calib_raw: Vec<f32> = rf
-        .predict_proba_batch(&x_calib_n)?
-        .into_iter()
-        .map(|row| row[pos_idx])
+    let calib_parsed: Vec<(String, Option<String>, Option<usize>)> = calibration_idx
+        .iter()
+        .map(|&i| parse_group(&groups[i]))
         .collect();
-    let p1_holdout_raw: Vec<f32> = rf
-        .predict_proba_batch(&x_holdout_n)?
-        .into_iter()
-        .map(|row| row[pos_idx])
+    let holdout_parsed: Vec<(String, Option<String>, Option<usize>)> = holdout_idx
+        .iter()
+        .map(|&i| parse_group(&groups[i]))
         .collect();
 
-    drop(x_calib_n);
-    drop(x_holdout_n);
+    let (x_train, y_train, x_calib, y_calib, x_holdout, y_holdout) =
+        fill_splits(&train_idx, &calibration_idx, &holdout_idx, &xs, &ys);
+    let n_train = x_train.len();
+    drop(xs);
+    drop(ys);
 
-    // Calibrator fit on calibration split only; applied to both splits.
-    let calibrator = CalibratorKind::fit_auto(&p1_calib_raw, &y_calib);
-    let p1_calib_cal = calibrator.transform_slice(&p1_calib_raw);
-    let p1_holdout_cal = calibrator.transform_slice(&p1_holdout_raw);
-
-    // All thresholds derived from calibration set only — never from holdout.
-    let calib_youden_t = youden_optimal_threshold(&y_calib, &p1_calib_cal);
-    let calib_f1_t = f1_optimal_threshold(&y_calib, &p1_calib_cal);
-    let calib_spec90_t = specificity_constrained_threshold(&y_calib, &p1_calib_cal, TARGET_SPECIFICITY);
-
-    let calibration_split = SplitReport {
-        n_samples: calibration_idx.len(),
-        at_0_5: hard_report_at(&y_calib, &p1_calib_cal, 0.5),
-        at_youden: hard_report_at(&y_calib, &p1_calib_cal, calib_youden_t),
-        at_f1: hard_report_at(&y_calib, &p1_calib_cal, calib_f1_t),
-        at_spec90: hard_report_at(&y_calib, &p1_calib_cal, calib_spec90_t),
-        raw: prob_report(&y_calib, &p1_calib_raw),
-        calibrated: prob_report(&y_calib, &p1_calib_cal),
-    };
-    let holdout_split = SplitReport {
-        n_samples: holdout_idx.len(),
-        at_0_5: hard_report_at(&y_holdout, &p1_holdout_cal, 0.5),
-        at_youden: hard_report_at(&y_holdout, &p1_holdout_cal, calib_youden_t),
-        at_f1: hard_report_at(&y_holdout, &p1_holdout_cal, calib_f1_t),
-        at_spec90: hard_report_at(&y_holdout, &p1_holdout_cal, calib_spec90_t),
-        raw: prob_report(&y_holdout, &p1_holdout_raw),
-        calibrated: prob_report(&y_holdout, &p1_holdout_cal),
-    };
+    let output = compute_rf(
+        x_train,
+        y_train,
+        x_calib,
+        y_calib,
+        x_holdout,
+        y_holdout,
+        calib_parsed,
+        holdout_parsed,
+        n_trees,
+        pca_n_components,
+        feature_subsample_ratio,
+    )?;
 
     info!(
         analysis,
         source = ?source,
-        n_train = train_idx.len(),
+        n_train,
         n_calibration = calibration_idx.len(),
         n_holdout = holdout_idx.len(),
         n_trees,
-        holdout_acc_0_5 = format!("{:.2}%", holdout_split.at_0_5.accuracy * 100.0),
-        holdout_acc_youden = format!("{:.2}%", holdout_split.at_youden.accuracy * 100.0),
-        holdout_acc_spec90 = format!("{:.2}%", holdout_split.at_spec90.accuracy * 100.0),
-        holdout_spec_spec90 = format!("{:.2}%", holdout_split.at_spec90.specificity * 100.0),
-        holdout_brier_cal = format!("{:.4}", holdout_split.calibrated.brier),
-        holdout_auc_roc_cal = format!("{:.4}", holdout_split.calibrated.auc_roc),
-        holdout_spec90_t = format!("{:.3}", calib_spec90_t),
-        calibration_method = calibrator.method_name(),
+        holdout_acc_0_5 = format!("{:.2}%", output.holdout.at_0_5.accuracy * 100.0),
+        holdout_acc_youden = format!("{:.2}%", output.holdout.at_youden.accuracy * 100.0),
+        holdout_brier = format!("{:.4}", output.holdout.probabilistic.brier.point),
+        holdout_auc_roc = format!("{:.4}", output.holdout.probabilistic.auc_roc.point),
         "rf probabilistic results"
     );
 
@@ -868,10 +959,6 @@ fn run_rf_pipeline(
     };
     fs::create_dir_all(results_dir)?;
     let source_name = source.dir().to_string();
-    let calibration_predictions =
-        build_predictions(calib_parsed, &y_calib, &p1_calib_raw, &p1_calib_cal);
-    let holdout_predictions =
-        build_predictions(holdout_parsed, &y_holdout, &p1_holdout_raw, &p1_holdout_cal);
 
     let report = ClassificationReport {
         analysis: analysis.to_string(),
@@ -881,16 +968,13 @@ fn run_rf_pipeline(
         num_neighbors: 0,
         metric: "gini".to_string(),
         distance_weighted: false,
-        n_train: train_idx.len(),
-        calibration_method: calibrator.method_name().to_string(),
-        platt_a: calibrator.platt_params().0,
-        platt_b: calibrator.platt_params().1,
+        n_train,
         pca_components: pca_n_components,
         n_trees: Some(n_trees),
-        calibration: calibration_split,
-        holdout: holdout_split,
-        calibration_predictions,
-        holdout_predictions,
+        calibration: output.calibration,
+        holdout: output.holdout,
+        calibration_predictions: output.calibration_predictions,
+        holdout_predictions: output.holdout_predictions,
         split_manifest: SplitManifest {
             train: train_entry,
             calibration: calib_entry,
@@ -929,7 +1013,10 @@ fn run_rf_pipeline(
     fs::write(&json_path, json)?;
     write_subject_probs_csv(
         &csv_path,
-        report.calibration_predictions.iter().chain(report.holdout_predictions.iter()),
+        report
+            .calibration_predictions
+            .iter()
+            .chain(report.holdout_predictions.iter()),
     )?;
     info!(json = %json_path.display(), csv = %csv_path.display(), "wrote RF classification report");
 
@@ -966,6 +1053,7 @@ pub fn eval_rf_three_way_split(
         source,
         results_dir,
         None,
+        0.0,
     )?;
 
     for &k in pca_n_components {
@@ -981,6 +1069,7 @@ pub fn eval_rf_three_way_split(
             source,
             results_dir,
             Some(k),
+            0.0,
         )?;
     }
 
@@ -1027,9 +1116,13 @@ pub fn eval_rf_three_way_split_subject_aware(
     let mut holdout_idx: Vec<usize> = Vec::new();
     for (i, group) in groups.iter().enumerate() {
         let subj = parse_subject(group);
-        if train_set.contains(&subj) { train_idx.push(i); }
-        else if calib_set.contains(&subj) { calib_idx.push(i); }
-        else if holdout_set.contains(&subj) { holdout_idx.push(i); }
+        if train_set.contains(&subj) {
+            train_idx.push(i);
+        } else if calib_set.contains(&subj) {
+            calib_idx.push(i);
+        } else if holdout_set.contains(&subj) {
+            holdout_idx.push(i);
+        }
     }
 
     if train_idx.is_empty() {
@@ -1053,6 +1146,7 @@ pub fn eval_rf_three_way_split_subject_aware(
         source,
         results_dir,
         None,
+        0.0,
     )?;
 
     for &k in pca_n_components {
@@ -1068,8 +1162,298 @@ pub fn eval_rf_three_way_split_subject_aware(
             source,
             results_dir,
             Some(k),
+            0.0,
         )?;
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// K-fold subject-stratified evaluators
+// ---------------------------------------------------------------------------
+
+#[allow(clippy::too_many_arguments)]
+fn run_kfold_subject_aware<F>(
+    xs: &[Vec<f32>],
+    ys: &[Label],
+    groups: &[String],
+    analysis: &str,
+    source: FeatureSource,
+    results_dir: &Path,
+    pca_n_components: &[usize],
+    k_folds: usize,
+    classifier_name: &str,
+    extra_pairs: &[(&str, String)],
+    compute_fn: F,
+) -> Result<()>
+where
+    F: Fn(
+        Vec<Vec<f32>>,
+        Vec<i32>,
+        Vec<Vec<f32>>,
+        Vec<i32>,
+        Vec<Vec<f32>>,
+        Vec<i32>,
+        Vec<(String, Option<String>, Option<usize>)>,
+        Vec<(String, Option<String>, Option<usize>)>,
+        Option<usize>,
+    ) -> Result<FoldOutput>,
+{
+    let mut subject_label: HashMap<String, Label> = HashMap::new();
+    for (group, &label) in groups.iter().zip(ys.iter()) {
+        subject_label.entry(parse_subject(group)).or_insert(label);
+    }
+
+    let mut controls: Vec<String> = Vec::new();
+    let mut anhedonics: Vec<String> = Vec::new();
+    for (subj, label) in &subject_label {
+        match label {
+            Label::Control => controls.push(subj.clone()),
+            Label::Anhedonic => anhedonics.push(subj.clone()),
+        }
+    }
+    controls.sort();
+    anhedonics.sort();
+
+    let kfold_splits = subject_kfold_splits(&controls, &anhedonics, k_folds, SEED);
+
+    let pca_variants: Vec<Option<usize>> = std::iter::once(None)
+        .chain(pca_n_components.iter().copied().map(Some))
+        .collect();
+
+    let source_name = source.dir().to_string();
+
+    for pca in pca_variants {
+        let mut fold_reports: Vec<KFoldFoldReport> = Vec::new();
+
+        for (fold_idx, (train_s, calib_s, holdout_s)) in kfold_splits.iter().enumerate() {
+            let train_set: HashSet<String> = train_s.iter().cloned().collect();
+            let calib_set: HashSet<String> = calib_s.iter().cloned().collect();
+            let holdout_set: HashSet<String> = holdout_s.iter().cloned().collect();
+
+            let mut train_idx: Vec<usize> = Vec::new();
+            let mut calib_idx: Vec<usize> = Vec::new();
+            let mut holdout_idx: Vec<usize> = Vec::new();
+            for (i, group) in groups.iter().enumerate() {
+                let subj = parse_subject(group);
+                if train_set.contains(&subj) {
+                    train_idx.push(i);
+                } else if calib_set.contains(&subj) {
+                    calib_idx.push(i);
+                } else if holdout_set.contains(&subj) {
+                    holdout_idx.push(i);
+                }
+            }
+
+            let train_idx = balance_train_indices(&train_idx, ys, SEED + fold_idx as u64);
+            let train_entry = split_entry(&train_idx, groups, ys);
+            let calib_entry = split_entry(&calib_idx, groups, ys);
+            let holdout_entry = split_entry(&holdout_idx, groups, ys);
+            let calib_parsed: Vec<_> = calib_idx.iter().map(|&i| parse_group(&groups[i])).collect();
+            let holdout_parsed: Vec<_> = holdout_idx
+                .iter()
+                .map(|&i| parse_group(&groups[i]))
+                .collect();
+            let n_calib = calib_idx.len();
+            let n_holdout = holdout_idx.len();
+
+            let (x_train, y_train, x_calib, y_calib, x_holdout, y_holdout) =
+                fill_splits(&train_idx, &calib_idx, &holdout_idx, xs, ys);
+            let n_train = x_train.len();
+
+            let output = compute_fn(
+                x_train,
+                y_train,
+                x_calib,
+                y_calib,
+                x_holdout,
+                y_holdout,
+                calib_parsed,
+                holdout_parsed,
+                pca,
+            )?;
+
+            info!(
+                analysis, classifier = classifier_name, fold = fold_idx, pca = ?pca,
+                n_train, n_calib, n_holdout,
+                holdout_auc_roc = format!("{:.4}", output.holdout.probabilistic.auc_roc.point),
+                holdout_auc_pr = format!("{:.4}", output.holdout.probabilistic.auc_pr.point),
+                holdout_brier = format!("{:.4}", output.holdout.probabilistic.brier.point),
+                "k-fold fold result"
+            );
+
+            fold_reports.push(KFoldFoldReport {
+                fold: fold_idx,
+                n_train,
+                n_calibration: n_calib,
+                n_holdout,
+                holdout: output.holdout,
+                split_manifest: SplitManifest {
+                    train: train_entry,
+                    calibration: calib_entry,
+                    holdout: holdout_entry,
+                },
+            });
+        }
+
+        let aggregated = aggregate_kfold_metrics(&fold_reports);
+        info!(
+            analysis, classifier = classifier_name, pca = ?pca, k_folds,
+            mean_auc_roc = format!("{:.4}", aggregated.mean_auc_roc),
+            std_auc_roc = format!("{:.4}", aggregated.std_auc_roc),
+            mean_auc_pr = format!("{:.4}", aggregated.mean_auc_pr),
+            std_auc_pr = format!("{:.4}", aggregated.std_auc_pr),
+            "k-fold complete"
+        );
+
+        let report = KFoldClassificationReport {
+            analysis: analysis.to_string(),
+            source: source_name.clone(),
+            split_seed: SEED,
+            classifier: classifier_name.to_string(),
+            num_neighbors: extra_pairs
+                .iter()
+                .find(|(k, _)| *k == "k")
+                .and_then(|(_, v)| v.parse().ok())
+                .unwrap_or(0),
+            metric: extra_pairs
+                .iter()
+                .find(|(k, _)| *k == "metric")
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default(),
+            distance_weighted: classifier_name == "knn",
+            pca_components: pca,
+            n_trees: extra_pairs
+                .iter()
+                .find(|(k, _)| *k == "trees")
+                .and_then(|(_, v)| v.parse().ok()),
+            k_folds,
+            folds: fold_reports,
+            aggregated,
+        };
+
+        let effective_results_dir;
+        let out_dir: &Path = if let Some(k) = pca {
+            effective_results_dir = results_dir.join("kfold").join(format!("pca_{k}"));
+            &effective_results_dir
+        } else {
+            effective_results_dir = results_dir.join("kfold");
+            &effective_results_dir
+        };
+        fs::create_dir_all(out_dir)?;
+
+        let mut run_counter = 0;
+        let json_path = loop {
+            let mut bids = BidsFilename::new()
+                .with_pair("analysis", analysis)
+                .with_pair("source", source_name.as_str())
+                .with_pair("classifier", classifier_name)
+                .with_pair("folds", k_folds.to_string());
+            for (key, val) in extra_pairs {
+                bids = bids.with_pair(*key, val.as_str());
+            }
+            let filename = bids
+                .with_pair("run", format!("{:02}", run_counter).as_str())
+                .with_suffix("kfold_classification")
+                .with_extension(".json")
+                .to_filename();
+            let path = out_dir.join(filename);
+            if !path.exists() {
+                break path;
+            }
+            run_counter += 1;
+        };
+
+        fs::write(&json_path, serde_json::to_string_pretty(&report)?)?;
+        info!(json = %json_path.display(), "wrote k-fold classification report");
+    }
+
+    Ok(())
+}
+
+/// Subject-disjoint k-fold CV with KNN.
+///
+/// Produces one aggregated JSON per PCA variant (plus full-vector) under
+/// `results_dir/kfold/` and `results_dir/kfold/pca_{k}/`.
+#[allow(clippy::too_many_arguments)]
+pub fn eval_knn_kfold_subject_aware(
+    xs: Vec<Vec<f32>>,
+    ys: Vec<Label>,
+    groups: &[String],
+    num_neighbors: usize,
+    metric: DistanceMetric,
+    analysis: &str,
+    source: FeatureSource,
+    results_dir: &Path,
+    pca_n_components: &[usize],
+    k_folds: usize,
+) -> Result<()> {
+    let extra = vec![
+        ("k", num_neighbors.to_string()),
+        ("metric", metric.as_str().to_string()),
+    ];
+    run_kfold_subject_aware(
+        &xs,
+        &ys,
+        groups,
+        analysis,
+        source,
+        results_dir,
+        pca_n_components,
+        k_folds,
+        "knn",
+        &extra,
+        move |x_tr, y_tr, x_ca, y_ca, x_ho, y_ho, cp, hp, pca| {
+            compute_knn(
+                x_tr,
+                y_tr,
+                x_ca,
+                y_ca,
+                x_ho,
+                y_ho,
+                cp,
+                hp,
+                num_neighbors,
+                metric,
+                pca,
+            )
+        },
+    )
+}
+
+/// Subject-disjoint k-fold CV with Random Forest.
+///
+/// Produces one aggregated JSON per PCA variant (plus full-vector) under
+/// `results_dir/kfold/` and `results_dir/kfold/pca_{k}/`.
+#[allow(clippy::too_many_arguments)]
+pub fn eval_rf_kfold_subject_aware(
+    xs: Vec<Vec<f32>>,
+    ys: Vec<Label>,
+    groups: &[String],
+    n_trees: usize,
+    analysis: &str,
+    source: FeatureSource,
+    results_dir: &Path,
+    pca_n_components: &[usize],
+    k_folds: usize,
+) -> Result<()> {
+    let extra = vec![("trees", n_trees.to_string())];
+    run_kfold_subject_aware(
+        &xs,
+        &ys,
+        groups,
+        analysis,
+        source,
+        results_dir,
+        pca_n_components,
+        k_folds,
+        "rf",
+        &extra,
+        move |x_tr, y_tr, x_ca, y_ca, x_ho, y_ho, cp, hp, pca| {
+            compute_rf(
+                x_tr, y_tr, x_ca, y_ca, x_ho, y_ho, cp, hp, n_trees, pca, 0.0,
+            )
+        },
+    )
 }
