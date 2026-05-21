@@ -396,7 +396,10 @@ mod tests {
     fn isotonic_monotone_on_perfect_data() {
         // Perfectly separable: all positives have score > 0.5.
         let scores: Vec<f32> = (0..100).map(|i| i as f32 / 99.0).collect();
-        let y: Vec<i32> = scores.iter().map(|&s| if s > 0.5 { 1 } else { 0 }).collect();
+        let y: Vec<i32> = scores
+            .iter()
+            .map(|&s| if s > 0.5 { 1 } else { 0 })
+            .collect();
         let reg = IsotonicRegressor::fit(&scores, &y);
         // Calibrated prob should be non-decreasing.
         for i in 1..reg.probs.len() {
@@ -445,7 +448,10 @@ mod tests {
     fn calibrator_dispatches_by_size() {
         // ≤ 1000 → Platt
         let scores: Vec<f32> = (0..50).map(|i| i as f32 / 49.0).collect();
-        let y: Vec<i32> = scores.iter().map(|&s| if s > 0.5 { 1 } else { 0 }).collect();
+        let y: Vec<i32> = scores
+            .iter()
+            .map(|&s| if s > 0.5 { 1 } else { 0 })
+            .collect();
         match CalibratorKind::fit_auto(&scores, &y) {
             CalibratorKind::Platt(_) => {}
             CalibratorKind::Isotonic(_) => panic!("expected Platt for n=50"),
@@ -453,7 +459,10 @@ mod tests {
 
         // > 1000 → Isotonic
         let scores: Vec<f32> = (0..1001).map(|i| i as f32 / 1000.0).collect();
-        let y: Vec<i32> = scores.iter().map(|&s| if s > 0.5 { 1 } else { 0 }).collect();
+        let y: Vec<i32> = scores
+            .iter()
+            .map(|&s| if s > 0.5 { 1 } else { 0 })
+            .collect();
         match CalibratorKind::fit_auto(&scores, &y) {
             CalibratorKind::Isotonic(_) => {}
             CalibratorKind::Platt(_) => panic!("expected Isotonic for n=1001"),

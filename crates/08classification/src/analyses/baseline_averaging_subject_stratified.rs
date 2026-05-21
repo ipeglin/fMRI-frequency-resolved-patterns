@@ -11,10 +11,11 @@ use utils::bids_subject_id::BidsSubjectId;
 use utils::config::AppConfig;
 
 use crate::classifiers::DistanceMetric;
-use crate::dataset::{
-    AnalysisKind, build_per_roi_dataset, load_labels, enabled_hammer_sources
+use crate::dataset::{AnalysisKind, build_per_roi_dataset, enabled_hammer_sources, load_labels};
+use crate::eval::{
+    eval_knn_kfold_subject_aware, eval_knn_three_way_split_subject_aware,
+    eval_rf_kfold_subject_aware, eval_rf_three_way_split_subject_aware,
 };
-use crate::eval::{eval_knn_three_way_split_subject_aware, eval_rf_three_way_split_subject_aware};
 
 pub fn run(cfg: &AppConfig) -> Result<()> {
     let started = Instant::now();
@@ -40,7 +41,9 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
         .collect();
     labels.retain(|k, _| subject_ids.contains(k));
 
-    let results_dir = cfg.resolved_classification_results_dir().join("subject_stratified");
+    let results_dir = cfg
+        .resolved_classification_results_dir()
+        .join("subject_stratified");
 
     for source in enabled_hammer_sources(cfg) {
         let (xs, ys, groups) = build_per_roi_dataset(

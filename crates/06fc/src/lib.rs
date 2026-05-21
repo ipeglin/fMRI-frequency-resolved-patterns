@@ -643,7 +643,11 @@ fn fc_for_ts_full_run(
             H5Attr::u32("n_timepoints", data.ncols() as u32),
         ],
     )?;
-    debug!(task_name, n_channels = data.nrows(), "computed fc/ts full_run_std");
+    debug!(
+        task_name,
+        n_channels = data.nrows(),
+        "computed fc/ts full_run_std"
+    );
     Ok(())
 }
 
@@ -794,13 +798,7 @@ pub fn run(cfg: &AppConfig) -> Result<()> {
                             && let Ok(ds) = cwt_root.dataset("full_run_std")
                         {
                             let fc_cwt = open_or_create_group(&fc_group, "cwt", false)?;
-                            fc_for_cwt_dataset(
-                                &ds,
-                                &fc_cwt,
-                                "full_run_std",
-                                task_name,
-                                cfg.force,
-                            )?;
+                            fc_for_cwt_dataset(&ds, &fc_cwt, "full_run_std", task_name, cfg.force)?;
                         }
                         if let Ok(mvmd_root) = h5_file.group("04hht") {
                             let fc_mvmd = open_or_create_group(&fc_group, "mvmd", false)?;

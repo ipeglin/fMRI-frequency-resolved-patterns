@@ -584,10 +584,7 @@ fn validate_roi_range(roi_indices: &[i64], n_available: i64, what: &str) -> Resu
 /// Returns `(per_roi [n_rois, 1920], mean [1920])` on CPU as f32.
 fn extract(ctx: &AnalysisCtx, src: FeatureSrc, spec: &Tensor) -> (Tensor, Tensor) {
     let batch = batch_spectrum_to_input(spec, AnalysisCtx::pre_normalized_for(src), ctx.fit);
-    let per_roi = ctx
-        .extractor
-        .extract_features(&batch)
-        .to_kind(Kind::Float);
+    let per_roi = ctx.extractor.extract_features(&batch).to_kind(Kind::Float);
     let mean = per_roi.mean_dim(Some([0i64].as_slice()), false, Kind::Float);
     (per_roi, mean)
 }
@@ -602,10 +599,7 @@ fn extract_with_fit(
     fit: ImageFitMode,
 ) -> (Tensor, Tensor) {
     let batch = batch_spectrum_to_input(spec, AnalysisCtx::pre_normalized_for(src), fit);
-    let per_roi = ctx
-        .extractor
-        .extract_features(&batch)
-        .to_kind(Kind::Float);
+    let per_roi = ctx.extractor.extract_features(&batch).to_kind(Kind::Float);
     let mean = per_roi.mean_dim(Some([0i64].as_slice()), false, Kind::Float);
     (per_roi, mean)
 }
@@ -645,9 +639,23 @@ fn write_features(
     let per_roi_buf = tensor_to_vec_f32(per_roi);
     let mean_buf = tensor_to_vec_f32(mean);
     let roi_idx_u32: Vec<u32> = ctx.roi_indices.iter().map(|&i| i as u32).collect();
-    write_dataset(&group, "per_roi", &per_roi_buf, &[n_rois, feat_dim], None, ctx.force)?;
+    write_dataset(
+        &group,
+        "per_roi",
+        &per_roi_buf,
+        &[n_rois, feat_dim],
+        None,
+        ctx.force,
+    )?;
     write_dataset(&group, "mean", &mean_buf, &[feat_dim], None, ctx.force)?;
-    write_dataset(&group, "roi_indices", &roi_idx_u32, &[n_rois], None, ctx.force)?;
+    write_dataset(
+        &group,
+        "roi_indices",
+        &roi_idx_u32,
+        &[n_rois],
+        None,
+        ctx.force,
+    )?;
     write_attrs(
         &group,
         &[
@@ -866,9 +874,23 @@ fn write_features_resized(
     let per_roi_buf = tensor_to_vec_f32(per_roi);
     let mean_buf = tensor_to_vec_f32(mean);
     let roi_idx_u32: Vec<u32> = ctx.roi_indices.iter().map(|&i| i as u32).collect();
-    write_dataset(&group, "per_roi", &per_roi_buf, &[n_rois, feat_dim], None, ctx.force)?;
+    write_dataset(
+        &group,
+        "per_roi",
+        &per_roi_buf,
+        &[n_rois, feat_dim],
+        None,
+        ctx.force,
+    )?;
     write_dataset(&group, "mean", &mean_buf, &[feat_dim], None, ctx.force)?;
-    write_dataset(&group, "roi_indices", &roi_idx_u32, &[n_rois], None, ctx.force)?;
+    write_dataset(
+        &group,
+        "roi_indices",
+        &roi_idx_u32,
+        &[n_rois],
+        None,
+        ctx.force,
+    )?;
     write_attrs(
         &group,
         &[
@@ -1094,7 +1116,9 @@ fn set_fingerprint_attr(group: &hdf5::Group, fingerprint: &str) -> Result<()> {
         let name = std::ffi::CString::new("roi_selection_fingerprint")
             .expect("static string is valid CString");
         // Safety: group.id() is a valid open HDF5 id; name is a valid C string.
-        unsafe { hdf5_sys::h5a::H5Adelete(group.id(), name.as_ptr()); }
+        unsafe {
+            hdf5_sys::h5a::H5Adelete(group.id(), name.as_ptr());
+        }
     }
     let unicode: VarLenUnicode = fingerprint.parse().unwrap();
     group
@@ -1126,8 +1150,7 @@ pub fn run_for_file(ctx: &AnalysisCtx, h5: &hdf5::File) -> Result<()> {
     // and force is not set. This avoids redundant forward passes when the pipeline
     // is re-run with an identical ROI selection.
     if !ctx.force
-        && read_fingerprint_attr(&features_root)
-            .is_some_and(|s| s == ctx.roi_selection_fingerprint)
+        && read_fingerprint_attr(&features_root).is_some_and(|s| s == ctx.roi_selection_fingerprint)
     {
         info!(
             subject = ctx.subject_id,

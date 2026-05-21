@@ -12,9 +12,7 @@ use utils::bids_subject_id::BidsSubjectId;
 use utils::config::AppConfig;
 
 use crate::classifiers::DistanceMetric;
-use crate::dataset::{
-    AnalysisKind, build_per_roi_dataset, load_labels, enabled_hammer_sources
-};
+use crate::dataset::{AnalysisKind, build_per_roi_dataset, enabled_hammer_sources, load_labels};
 use crate::eval::{eval_knn_three_way_split, eval_rf_three_way_split};
 
 pub fn run(cfg: &AppConfig) -> Result<()> {
